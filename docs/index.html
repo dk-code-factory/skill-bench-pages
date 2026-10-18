@@ -1111,11 +1111,11 @@ if (typeof module !== 'undefined' && module.exports) {
     return el('section', { class: 'hero compact-hero' }, el('div', { class: 'eyebrow' }, eyebrow), el('h1', {}, title), el('p', {}, text))
   }
 
-  function skillVersionFooter(skill) {
+  function skillVersionFooter(skill, tag = 'p') {
     const snapshots = skill.rows?.length ? skill.rows.map((run) => run.toolSnapshot || run) : [skill]
     const versions = skill.versions || [...new Set(snapshots.map((snapshot) => snapshot.version || snapshot.skillVersion).filter(Boolean))].sort()
     const unversioned = skill.unversioned ?? snapshots.some((snapshot) => !snapshot.version && !snapshot.skillVersion)
-    return versions.length ? el('p', { class: 'skill-version' }, `Version: ${versions.join(', ')}${unversioned ? ' + unversioned' : ''}`) : null
+    return versions.length ? el(tag, { class: tag === 'span' ? 'subline skill-version' : 'skill-version' }, `Version: ${versions.join(', ')}${unversioned ? ' + unversioned' : ''}`) : null
   }
 
   function landingRankCard(group, marker, value, note) {
@@ -1314,7 +1314,7 @@ if (typeof module !== 'undefined' && module.exports) {
       const box = selectable ? el('input', { type: 'checkbox', checked, disabled: !checked && selected.length >= 5, 'aria-label': `Compare ${group.label}`, onchange: (event) => setComparison(params, group.id, event.target.checked) }) : el('span', { class: 'muted' }, '—')
       body.append(el('tr', {},
         el('td', {}, box),
-        el('td', {}, el('strong', {}, `${index + 1}. `, runSetLink(group.rows, group.label)), el('span', { class: 'subline' }, group.skillIds.length === 1 ? [skillInfoLink(group.skillIds[0]), ' · '] : null, `${group.dimension} · ${group.coverage} target${group.coverage === 1 ? '' : 's'} · `, runCountLink(group.rows)), groupBy === 'language' ? null : experimentalToolBadge(group.rows), group.coverage < 2 ? badge('low evidence', 'unproven') : null),
+        el('td', {}, el('strong', {}, `${index + 1}. `, runSetLink(group.rows, group.label)), el('span', { class: 'subline' }, group.skillIds.length === 1 ? [skillInfoLink(group.skillIds[0]), ' · '] : null, `${group.dimension} · ${group.coverage} target${group.coverage === 1 ? '' : 's'} · `, runCountLink(group.rows)), groupBy === 'language' ? null : experimentalToolBadge(group.rows), group.coverage < 2 ? badge('low evidence', 'unproven') : null, group.skillIds.length === 1 ? skillVersionFooter(group, 'span') : null),
         el('td', { class: 'num' }, fmt(group.medianCost, 'money'), el('span', { class: 'subline' }, 'median / run')),
         el('td', { class: 'num' }, fmt(group.realPerRun)),
         el('td', { class: 'num' }, fmt(group.highMedium)),
@@ -1893,7 +1893,7 @@ if (typeof module !== 'undefined' && module.exports) {
       }
       const unique = [...allIssues.values()].filter((reporters) => reporters.size === 1 && reporters.has(group.id)).length
       const shared = [...allIssues.values()].filter((reporters) => reporters.size > 1 && reporters.has(group.id)).length
-      body.append(el('tr', {}, el('td', {}, el('strong', {}, runSetLink(group.rows, group.label)), el('span', { class: 'subline' }, skillInfoLink(group.id), ' · ', runCountLink(group.rows)), experimentalToolBadge(group.rows)), el('td', { class: 'num' }, fmt(group.cost, 'money')), el('td', { class: 'num' }, fmt(group.real)), el('td', { class: 'num' }, fmt(unique)), el('td', { class: 'num' }, fmt(shared)), el('td', { class: 'num' }, fmt(group.completenessBreakdown.all.possible)), el('td', { class: 'num' }, fmt(group.completeness, 'percent')), el('td', { class: 'num' }, fmt(group.precision, 'percent')), el('td', { class: 'num' }, fmt(group.successRate, 'percent'))))
+      body.append(el('tr', {}, el('td', {}, el('strong', {}, runSetLink(group.rows, group.label)), el('span', { class: 'subline' }, skillInfoLink(group.id), ' · ', runCountLink(group.rows)), experimentalToolBadge(group.rows), skillVersionFooter(group, 'span')), el('td', { class: 'num' }, fmt(group.cost, 'money')), el('td', { class: 'num' }, fmt(group.real)), el('td', { class: 'num' }, fmt(unique)), el('td', { class: 'num' }, fmt(shared)), el('td', { class: 'num' }, fmt(group.completenessBreakdown.all.possible)), el('td', { class: 'num' }, fmt(group.completeness, 'percent')), el('td', { class: 'num' }, fmt(group.precision, 'percent')), el('td', { class: 'num' }, fmt(group.successRate, 'percent'))))
     }
     return el('div', { class: 'table-wrap' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Skill'), el('th', { class: 'num' }, metricLabel('Attempted cost')), el('th', { class: 'num' }, metricLabel('Distinct real')), el('th', { class: 'num' }, metricLabel('Only this skill')), el('th', { class: 'num' }, metricLabel('Shared')), el('th', { class: 'num' }, metricLabel('Total real found')), el('th', { class: 'num' }, metricLabel('Completeness')), el('th', { class: 'num' }, metricLabel('Precision')), el('th', { class: 'num' }, metricLabel('Success')))), body))
   }
