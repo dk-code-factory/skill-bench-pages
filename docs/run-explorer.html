@@ -674,6 +674,8 @@ if (typeof module !== 'undefined' && module.exports) {
   let activeView = 'home'
   let activePath = 'home'
   let activeParams = new URLSearchParams()
+  let pendingInteraction = null
+  window.history.scrollRestoration = 'manual'
 
   const el = (tag, attrs = {}, ...children) => {
     const node = document.createElement(tag)
@@ -905,7 +907,15 @@ if (typeof module !== 'undefined' && module.exports) {
     return control
   }
 
-  function frame(content) {
+  const updateStatus = el('p', { id: 'view-update-status', class: 'sr-only', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' })
+  app.after(updateStatus)
+
+  function announceResults(summary) {
+    updateStatus.textContent = 'Results updated. ' + summary
+  }
+
+  function frame(content, resultSummary = '') {
+    app.dataset.resultSummary = [resultSummary, ...[...content.querySelectorAll('[data-result-summary]')].map((node) => node.dataset.resultSummary)].filter(Boolean).join(' ')
     const navLink = (label, view) => hashLink(label, `#${view}`, activeView === view ? 'active' : '')
     app.replaceChildren(
       el('div', { class: 'shell' },
@@ -925,7 +935,7 @@ if (typeof module !== 'undefined' && module.exports) {
             el('input', { id: 'include-history', type: 'checkbox', checked: activeParams.get('history') === 'all', onchange: (event) => viewParams(activeParams, { history: event.target.checked ? 'all' : '' }, location.hash.slice(1).split('?')[0] || 'home') }),
             'Include historical data'),
           el('span', {}, activeParams.get('history') === 'all' ? 'Current and historical results' : 'Current benchmark results'),
-          activeView === 'home' && [...activeParams.keys()].some((key) => key !== 'compareSkills') ? el('button', { class: 'clear-filters', onclick: () => viewParams(new URLSearchParams(), { compareSkills: activeParams.get('compareSkills') }, 'home') }, 'Clear filters') : null,
+          activeView === 'home' && [...activeParams.keys()].some((key) => key !== 'compareSkills') ? el('button', { class: 'clear-filters', id: 'clear-filters', onclick: () => viewParams(new URLSearchParams(), { compareSkills: activeParams.get('compareSkills') }, 'home') }, 'Clear filters') : null,
         ),
         el('main', { id: 'main' }, hiddenHistoryNotice(), contextNotice(), content),
         el('footer', { class: 'footer' },
@@ -975,6 +985,13 @@ if (typeof module !== 'undefined' && module.exports) {
   // site-route: compare-modern
   // site-route: compare-legacy
   function route() {
+    const interaction = pendingInteraction
+    pendingInteraction = null
+    if (interaction && interaction.destination === location.hash && document.activeElement.id && document.activeElement.id !== interaction.focusId) {
+      // A text input can commit on blur while Tab moves focus to the next control.
+      // Capture the actual interaction immediately before replacing the old DOM.
+      Object.assign(interaction, captureInteraction())
+    }
     const raw = location.hash.slice(1) || 'home'
     const [path, query = ''] = raw.split('?')
     const parts = path.split('/').map(decodeURIComponent)
@@ -1002,14 +1019,38 @@ if (typeof module !== 'undefined' && module.exports) {
     else if (activeView === 'evaluation') renderCurrentEvaluations(params)
     else if (activeView === 'skills') renderSkills(parts[1] || null, params)
     else renderOverview(params)
+    const heading = document.querySelector('#main h1') || document.getElementById('main')
+    heading.id ||= 'view-heading'
+    heading.tabIndex = -1
+    if (interaction && interaction.destination === location.hash && interaction.view === interactionView(path, params)) {
+      for (const id of interaction.openMenus) {
+        const menu = document.getElementById(id)
+        if (menu) menu.open = true
+      }
+      for (const [id, left, top] of interaction.scrollAreas) {
+        const area = document.getElementById(id)
+        if (area) { area.scrollLeft = left; area.scrollTop = top }
+      }
+      const focused = document.getElementById(interaction.focusId)
+      const fallback = document.getElementById(interaction.fallbackId) || heading
+      const target = focused && !focused.disabled ? focused : fallback
+      target.focus({ preventScroll: true })
+      window.scrollTo({ left: interaction.left, top: interaction.top, behavior: 'instant' })
+      announceResults(app.dataset.resultSummary || 'View updated.')
+      return
+    }
+    updateStatus.textContent = ''
     const focusedPanel = activeView === 'choose' && params.get('tab') === 'models'
       ? params.get('evidenceModel') ? document.getElementById('canonical-evidence')
         : params.get('focus') === 'ranking' ? document.getElementById('model-ranking') : null
       : null
     if (focusedPanel) {
       focusedPanel.focus({ preventScroll: true })
-      focusedPanel.scrollIntoView({ block: 'start', behavior: 'auto' })
-    } else window.scrollTo({ top: 0, behavior: 'auto' })
+      focusedPanel.scrollIntoView({ block: 'start', behavior: 'instant' })
+    } else {
+      heading.focus({ preventScroll: true })
+      window.scrollTo({ top: 0, left: 0, behavior: 'instant' })
+    }
   }
 
   const runHash = (run) => preserveContext(`#run/${encodeURIComponent(run.id)}`)
@@ -1045,6 +1086,35 @@ if (typeof module !== 'undefined' && module.exports) {
     return el('div', { class: 'kpi' }, el('span', {}, label), el('strong', {}, value), note ? el('small', {}, note) : null)
   }
 
+  // site-spec: SITE-PAGE-014 ../../spec/site/pages.md#SITE-PAGE-014
+  function interactionView(path, params) {
+    return (path === 'overview' ? 'runs' : path) + (path === 'choose' ? ':' + (params.get('tab') === 'models' || params.get('group') === 'model' ? 'models' : 'skills') : '')
+  }
+
+  function captureInteraction() {
+    return {
+      focusId: document.activeElement.id,
+      fallbackId: document.activeElement.closest('.filter-menu')?.querySelector('summary')?.id,
+      left: window.scrollX, top: window.scrollY,
+      openMenus: [...app.querySelectorAll('.filter-menu[open]')].map((node) => node.id),
+      scrollAreas: [...app.querySelectorAll('[data-retain-scroll]')].map((node) => [node.id, node.scrollLeft, node.scrollTop]),
+    }
+  }
+
+  function controlNavigate(hash) {
+    const destination = new URL(hash.startsWith('#') ? hash : '#' + hash, location.href).hash
+    pendingInteraction = null
+    if (destination === location.hash) return
+    const [path, query = ''] = destination.slice(1).split('?')
+    const view = interactionView(path, new URLSearchParams(query))
+    if (view === interactionView(activePath, activeParams)) {
+      pendingInteraction = {
+        destination, view, ...captureInteraction(),
+      }
+    }
+    location.hash = destination
+  }
+
   // Shared filters keep a focused skill record; explicit view overrides still navigate normally.
   function viewParams(params, patch, view = activeView === 'skills' ? activePath : activeView) {
     const next = new URLSearchParams(params)
@@ -1052,7 +1122,7 @@ if (typeof module !== 'undefined' && module.exports) {
       if (value == null || value === '') next.delete(key)
       else next.set(key, value)
     }
-    location.hash = view + (next.toString() ? '?' + next.toString() : '')
+    controlNavigate(view + (next.toString() ? '?' + next.toString() : ''))
   }
 
   const overviewParams = viewParams
@@ -1072,11 +1142,11 @@ if (typeof module !== 'undefined' && module.exports) {
   function checklist(label, key, choices, params) {
     const selected = new Set(values(params, key))
     const summary = selected.size ? `${label} · ${selected.size}` : `${label} · All`
-    return el('details', { class: 'filter-menu' },
-      el('summary', {}, summary),
-      el('div', { class: 'filter-popover' },
+    return el('details', { class: 'filter-menu', id: `filter-menu-${key}` },
+      el('summary', { id: `filter-summary-${key}` }, summary),
+      el('div', { class: 'filter-popover', id: `filter-options-${key}`, 'data-retain-scroll': '' },
         choices.map(([value, text]) => {
-          const id = `filter-${key}-${String(value).replace(/[^a-z0-9]+/gi, '-')}`
+          const id = `filter-${key}-${encodeURIComponent(value)}`
           const box = el('input', { id, type: 'checkbox', checked: selected.has(value), onchange: (event) => patchValues(params, key, value, event.target.checked) })
           return el('label', { for: id }, box, el('span', {}, text))
         }),
@@ -1155,7 +1225,7 @@ if (typeof module !== 'undefined' && module.exports) {
       bar.append(field('Search', input, 'search'))
     }
     const hasFilters = ['platform', 'skills', 'model', 'languages', 'targets', 'q', 'status', 'runIds', 'evaluation', 'history', 'completeness'].some((key) => params.has(key))
-    if (hasFilters) bar.append(el('button', { class: 'clear-filters', onclick: () => {
+    if (hasFilters) bar.append(el('button', { class: 'clear-filters', id: 'clear-filters', onclick: () => {
       viewParams(params, Object.fromEntries(['platform', 'skills', 'model', 'languages', 'targets', 'q', 'status', 'runIds', 'evaluation', 'history', 'completeness'].map((key) => [key, ''])))
     } }, 'Clear filters'))
     return bar
@@ -1494,7 +1564,7 @@ if (typeof module !== 'undefined' && module.exports) {
         ),
         el('div', { class: 'skill-summary-grid' }, catalogue.map((skill) => landingSkillCard(skill, leaderRuns))),
       ),
-    ))
+    ), `${groups.length} ranked candidates.`)
   }
 
   function selectionFrom(params) { return values(params, 'compareSkills').filter((id) => tools.has(id) && matchesPlatform(tools.get(id), params)).slice(0, 5) }
@@ -1512,7 +1582,7 @@ if (typeof module !== 'undefined' && module.exports) {
     next.set('compareSkills', selected.join(','))
     return el('aside', { class: 'compare-dock', 'aria-live': 'polite' },
       el('div', {}, el('strong', {}, `${selected.length}/5 skills selected`), el('span', { class: 'subline' }, selected.map((id) => tools.get(id)?.label || id).join(' · '))),
-      el('div', {}, el('button', { onclick: () => viewParams(params, { compareSkills: '' }) }, 'Clear'), ' ', hashLink('Compare skills', `#compare?${next.toString()}`, 'button-link primary')),
+      el('div', {}, el('button', { id: 'clear-skill-comparison', onclick: () => viewParams(params, { compareSkills: '' }) }, 'Clear'), ' ', hashLink('Compare skills', `#compare?${next.toString()}`, 'button-link primary')),
     )
   }
 
@@ -1528,7 +1598,7 @@ if (typeof module !== 'undefined' && module.exports) {
     return el('th', { class: numeric ? 'num' : '', scope: 'col', 'aria-sort': active ? currentName : 'none' },
       el('span', { class: 'heading-with-hint' },
         el('button', {
-          class: 'sort-button', type: 'button',
+          class: 'sort-button', type: 'button', id: `decision-sort-${key}`,
           onclick: () => viewParams(params, { decision: key, decisionDir: nextValue === defaultValue ? '' : nextValue }),
           'aria-label': `Sort leaderboard by ${label}, ${nextName}`,
         }, label, active ? (currentDirection === -1 ? ' ↓' : ' ↑') : ''),
@@ -1543,7 +1613,7 @@ if (typeof module !== 'undefined' && module.exports) {
     for (const [index, group] of groups.entries()) {
       const selectable = groupBy === 'skill'
       const checked = selectable && selected.includes(group.id)
-      const box = selectable ? el('input', { type: 'checkbox', checked, disabled: !checked && selected.length >= 5, 'aria-label': `Compare ${group.label}`, onchange: (event) => setComparison(params, group.id, event.target.checked) }) : el('span', { class: 'muted' }, '—')
+      const box = selectable ? el('input', { id: `compare-skill-${encodeURIComponent(group.id)}`, type: 'checkbox', checked, disabled: !checked && selected.length >= 5, 'aria-label': `Compare ${group.label}`, onchange: (event) => setComparison(params, group.id, event.target.checked) }) : el('span', { class: 'muted' }, '—')
       body.append(el('tr', {},
         el('td', {}, box),
         el('td', {}, el('strong', {}, `${index + 1}. `, runSetLink(group.rows, group.label)), el('span', { class: 'subline' }, group.skillIds.length === 1 ? [skillInfoLink(group.skillIds[0]), ' · '] : null, `${group.dimension} · ${group.coverage} target${group.coverage === 1 ? '' : 's'} · `, runCountLink(group.rows)), groupBy === 'language' ? null : experimentalToolBadge(group.rows), group.coverage < 2 ? badge('low evidence', 'unproven') : null, group.skillIds.length === 1 ? skillVersionFooter(group, 'span') : null),
@@ -1569,7 +1639,7 @@ if (typeof module !== 'undefined' && module.exports) {
       decisionSortHeading('Cost / real', 'costPerReal', params, true),
       decisionSortHeading('Success', 'success', params, true),
     )), body)
-    return el('div', { class: 'table-wrap' }, groups.length ? table : el('div', { class: 'empty' }, 'No benchmark evidence matches these filters.'))
+    return el('div', { class: 'table-wrap', id: 'leaderboard-scroll', 'data-retain-scroll': '' }, groups.length ? table : el('div', { class: 'empty' }, 'No benchmark evidence matches these filters.'))
   }
 
   function comparisonList(value) {
@@ -1751,7 +1821,7 @@ if (typeof module !== 'undefined' && module.exports) {
       checklist('Languages', 'languages', languageChoices, params),
       checklist('Targets', 'targets', targetChoices, params),
     )
-    if (['platform', 'model', 'skills', 'languages', 'targets', 'history', 'completeness'].some((key) => params.has(key))) bar.append(el('button', { class: 'clear-filters', onclick: () => viewParams(params, { platform: '', model: '', skills: '', languages: '', targets: '', history: '', completeness: '', evidenceModel: '', evidenceVerdict: '' }) }, 'Clear filters'))
+    if (['platform', 'model', 'skills', 'languages', 'targets', 'history', 'completeness'].some((key) => params.has(key))) bar.append(el('button', { class: 'clear-filters', id: 'clear-filters', onclick: () => viewParams(params, { platform: '', model: '', skills: '', languages: '', targets: '', history: '', completeness: '', evidenceModel: '', evidenceVerdict: '' }) }, 'Clear filters'))
     return bar
   }
 
@@ -1909,7 +1979,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const direction = active ? (currentDirection === 'desc' ? 'asc' : 'desc') : defaultDirection
     return el('th', { class: key === 'model' ? '' : 'num', 'aria-sort': active ? (currentDirection === 'desc' ? 'descending' : 'ascending') : 'none' },
       el('span', { class: 'heading-with-hint' },
-        el('button', { class: 'sort-button', onclick: () => { location.hash = comparisonParams(params, { modelSort: key === 'value' ? '' : key, modelDir: direction === defaultDirection ? '' : direction }) }, 'aria-label': `Sort models by ${label}` }, label, active ? (currentDirection === 'desc' ? ' ↓' : ' ↑') : ''),
+        el('button', { class: 'sort-button', id: `model-sort-${key}`, onclick: () => { controlNavigate(comparisonParams(params, { modelSort: key === 'value' ? '' : key, modelDir: direction === defaultDirection ? '' : direction })) }, 'aria-label': `Sort models by ${label}` }, label, active ? (currentDirection === 'desc' ? ' ↓' : ' ↑') : ''),
         hint ? hintedLabel('', hint) : null,
       ),
     )
@@ -1948,7 +2018,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const headings = [
       ['Model', 'model'], ['Real / $', 'value'], ['Recorded total', 'totalCost'], ['Median known cost', 'medianCost'], ['Canonical real', 'real'], ['High + med', 'highMedium'], ['Precision', 'precision'], ['Completeness', 'completeness'], ['Cost / real', 'costPerReal'], ['Median runtime', 'wall'], ['Success', 'success'], ['Evidence', 'evidence'],
     ]
-    return el('div', { class: 'table-wrap model-table-wrap' }, el('table', { class: 'model-comparison-table' }, el('thead', {}, el('tr', {}, headings.map(([label, key]) => modelSortHeading(label, key, params, modelMetricHints[label] || metricHints[label])))), body))
+    return el('div', { class: 'table-wrap model-table-wrap', id: 'canonical-model-scroll', 'data-retain-scroll': '' }, el('table', { class: 'model-comparison-table' }, el('thead', {}, el('tr', {}, headings.map(([label, key]) => modelSortHeading(label, key, params, modelMetricHints[label] || metricHints[label])))), body))
   }
 
   function modelEvidencePanel(stats, params) {
@@ -1998,7 +2068,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const issueUrl = snapshot.issueUrl || 'https://github.com/dkropachev/automated-development/issues/42'
     const modelScopes = snapshot.scopes.filter((item) => !item.id.startsWith('supplemental-'))
     const scopePicker = field('Benchmark scope', select('model-scope', modelScopes.map((item) => [item.id, comparisonScopeName(item)]), scope.id, (event) => {
-      location.hash = comparisonParams(params, { scope: event.target.value, evidenceModel: '', evidenceVerdict: '' })
+      controlNavigate(comparisonParams(params, { scope: event.target.value, evidenceModel: '', evidenceVerdict: '' }))
     }))
     const hasCanonicalSelection = modelScopes.some((candidate) => filteredComparisonSources(snapshot, candidate, params).length)
     frame(el('div', {},
@@ -2023,14 +2093,15 @@ if (typeof module !== 'undefined' && module.exports) {
       })) : null,
       stats.length ? modelEvidencePanel(stats, params) : null,
       stats.length ? el('p', { class: 'method-note model-provenance' }, `Published gold snapshot: ${snapshot.id || 'version unavailable'} · ${snapshot.canonicalIssues.length} canonical records · filters affect cells and targets, never the per-model denominator.`) : null,
-    ))
+    ), `${stats.length} canonical models.`)
   }
 
   function discoveredModelCoverage(params) {
     const eligible = verifiedRuns.filter((run) => run.status === 'complete' && matchesEvidenceDimensions(run, params))
     const allReal = new Set(eligible.flatMap((run) => run.issues.filter((issue) => issue.verdict === 'real').map((issue) => issue.id)))
     const body = el('tbody')
-    for (const group of groupedStats(eligible, 'model', eligible).sort((a, b) => a.label.localeCompare(b.label))) {
+    const groups = groupedStats(eligible, 'model', eligible).sort((a, b) => a.label.localeCompare(b.label))
+    for (const group of groups) {
 
       body.append(el('tr', {},
         el('td', {}, group.label),
@@ -2040,10 +2111,10 @@ if (typeof module !== 'undefined' && module.exports) {
         el('td', { class: 'num' }, runCountLink(group.rows)),
       ))
     }
-    return el('section', { class: 'panel' },
+    return el('section', { 'data-result-summary': `${groups.length} discovered models.`, class: 'panel' },
       el('div', { class: 'panel-head' }, el('div', {}, el('h2', {}, 'Discovered coverage'), el('p', {}, 'Reviewed discovery across completed, hash-verified runs for the selected skills, targets, and languages. Pending runs are excluded from discovery scores and denominators. This panel does not change the sealed canonical model score.'))),
       discoveryNotice(eligible),
-      eligible.length ? el('div', { class: 'table-wrap' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Model'), el('th', { class: 'num' }, 'Distinct real'), el('th', { class: 'num' }, 'Discovered coverage'), el('th', { class: 'num' }, 'Pending runs'), el('th', { class: 'num' }, 'Runs'))), body)) : el('div', { class: 'empty' }, 'No completed benchmark runs match these filters.'),
+      eligible.length ? el('div', { class: 'table-wrap', id: 'discovered-model-scroll', 'data-retain-scroll': '' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Model'), el('th', { class: 'num' }, 'Distinct real'), el('th', { class: 'num' }, 'Discovered coverage'), el('th', { class: 'num' }, 'Pending runs'), el('th', { class: 'num' }, 'Runs'))), body)) : el('div', { class: 'empty' }, 'No completed benchmark runs match these filters.'),
     )
   }
 
@@ -2062,7 +2133,7 @@ if (typeof module !== 'undefined' && module.exports) {
     if (!base.length) return frame(el('div', {},
       compactHero('Choose a reviewer', 'No completed benchmark results for these filters.', 'Experimental reports remain available separately and do not contribute to benchmark rankings.'),
       chooseTabs(params, 'skills'), filterBar(params),
-    ))
+    ), '0 candidates.')
     const requestedGroup = params.get('group') || 'skill'
     const groupBy = ['skill', 'skillModel', 'language'].includes(requestedGroup) ? requestedGroup : 'skill'
     const sort = decisionSortKey(params)
@@ -2091,13 +2162,13 @@ if (typeof module !== 'undefined' && module.exports) {
       supplementalSkillPanel(params),
       el('div', { class: 'notice info evidence-note' }, 'Model quality is grouped by the explicitly requested model under test. Observed runtime model stacks remain visible as execution metadata and do not control this filter. Language results are directional because the current benchmark has one target per language.'),
       comparisonTray(selected, params),
-    ))
+    ), `${groups.length} candidates.`)
   }
 
   function compareSelector(params, selected, dimensionParams) {
     return el('section', { class: 'selection-grid' }, DATA.tools.filter((tool) => matchesPlatform(tool, params) && (verifiedRuns.some((run) => skillIdentity(run) === tool.skillId && matchesOverviewDimensions(run, dimensionParams)) || [].some((record) => record.skillId === tool.skillId))).map((tool) => {
       const checked = selected.includes(tool.skillId)
-      const box = el('input', { type: 'checkbox', checked, disabled: !checked && selected.length >= 5, onchange: (event) => setComparison(params, tool.skillId, event.target.checked) })
+      const box = el('input', { id: `compare-skill-${encodeURIComponent(tool.skillId)}`, type: 'checkbox', checked, disabled: !checked && selected.length >= 5, onchange: (event) => setComparison(params, tool.skillId, event.target.checked) })
       return el('label', { class: `selection-card${checked ? ' selected' : ''}` }, box, el('span', {}, el('strong', {}, tool.label), experimentalToolBadge(tool), el('small', {}, tool.source || tool.id)))
     }))
   }
@@ -2119,7 +2190,7 @@ if (typeof module !== 'undefined' && module.exports) {
       const shared = [...allIssues.values()].filter((reporters) => reporters.size > 1 && reporters.has(group.id)).length
       body.append(el('tr', {}, el('td', {}, el('strong', {}, runSetLink(group.rows, group.label)), el('span', { class: 'subline' }, skillInfoLink(group.id), ' · ', runCountLink(group.rows), group.pendingRows.length ? ` · ${group.pendingRows.length} pending` : ''), experimentalToolBadge(group.rows), skillVersionFooter(group, 'span')), el('td', { class: 'num' }, fmt(group.totalCost, 'money')), el('td', { class: 'num' }, fmt(discoveryValue(group, group.real))), el('td', { class: 'num' }, fmt(discoveryValue(group, unique))), el('td', { class: 'num' }, fmt(discoveryValue(group, shared))), el('td', { class: 'num' }, fmt(discoveryValue(group, group.completenessBreakdown.all.possible))), el('td', { class: 'num' }, fmt(discoveryValue(group, group.completeness), 'percent')), el('td', { class: 'num' }, fmt(discoveryValue(group, group.precision), 'percent')), el('td', { class: 'num' }, fmt(group.successRate, 'percent'))))
     }
-    return el('div', { class: 'table-wrap' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Skill'), el('th', { class: 'num' }, metricLabel('Attempted cost')), el('th', { class: 'num' }, metricLabel('Distinct real')), el('th', { class: 'num' }, metricLabel('Only this skill')), el('th', { class: 'num' }, metricLabel('Shared')), el('th', { class: 'num' }, metricLabel('Total real found')), el('th', { class: 'num' }, metricLabel('Completeness')), el('th', { class: 'num' }, metricLabel('Precision')), el('th', { class: 'num' }, metricLabel('Success')))), body))
+    return el('div', { class: 'table-wrap', id: 'skill-comparison-scroll', 'data-retain-scroll': '' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Skill'), el('th', { class: 'num' }, metricLabel('Attempted cost')), el('th', { class: 'num' }, metricLabel('Distinct real')), el('th', { class: 'num' }, metricLabel('Only this skill')), el('th', { class: 'num' }, metricLabel('Shared')), el('th', { class: 'num' }, metricLabel('Total real found')), el('th', { class: 'num' }, metricLabel('Completeness')), el('th', { class: 'num' }, metricLabel('Precision')), el('th', { class: 'num' }, metricLabel('Success')))), body))
   }
 
   // site-spec: SITE-PAGE-005 ../../spec/site/pages.md#SITE-PAGE-005
@@ -2149,7 +2220,7 @@ if (typeof module !== 'undefined' && module.exports) {
         el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('div', {}, el('h2', {}, 'Head-to-head evidence'), el('p', {}, 'Unique contribution shows what each skill adds beyond the other selected skills.'))), comparisonMatrix(groups)),
         el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('div', {}, el('h2', {}, 'Cost / completeness'), el('p', {}, 'Upper-left candidates provide more discovered coverage for less total spend.'))), el('div', { class: 'panel-body' }, paretoChart(groups.filter((group) => group.rows.length)))),
       ),
-    ))
+    ), `${selected.length} selected skills.`)
   }
 
   // site-spec: SITE-PAGE-006 ../../spec/site/pages.md#SITE-PAGE-006
@@ -2161,7 +2232,7 @@ if (typeof module !== 'undefined' && module.exports) {
       filterBar(params),
       skillModelAnalysis(visible, params),
       chartGrid(visible, params),
-    ))
+    ), `${visible.length} benchmark runs.`)
   }
 
   function evaluationRows(params) {
@@ -2193,7 +2264,7 @@ if (typeof module !== 'undefined' && module.exports) {
             rows.every((run) => run.usage.costUsd != null) ? fmt(total(rows, (run) => run.usage.costUsd), 'money') : 'unavailable',
             rows.some((run) => run.usage.sources.costUsd === 'api-estimate') ? 'Standard API rates · independent of subscription' : 'no recorded USD receipt'),
         ),
-        detail ? el('div', { class: 'table-wrap' }, el('table', { class: 'evaluation-targets' },
+        detail ? el('div', { class: 'table-wrap', id: `evaluation-scroll-${encodeURIComponent(entry.id)}`, 'data-retain-scroll': '' }, el('table', { class: 'evaluation-targets' },
           el('thead', {}, el('tr', {}, ['Target', 'Real findings', 'Tokens', 'API cost', 'Report'].map((label) => el('th', {}, label)))),
           el('tbody', {}, rows.map((run) => el('tr', {}, el('td', {}, run.targetId),
             el('td', { class: 'num' }, fmt(run.localIssues.filter((issue) => issue.verdict === 'real').length)),
@@ -2212,7 +2283,7 @@ if (typeof module !== 'undefined' && module.exports) {
       compactHero('Skill evaluation', params.has('evaluation') && !(DATA.currentEvaluations || []).some((entry) => entry.id === params.get('evaluation')) ? 'Recorded skill evaluation' : 'Latest skill evaluation', 'Completed full benchmark results tied to the recorded skill files.'),
       filterBar(params),
       entries.length ? entries.map((entry) => evaluationCard(entry, true, params)) : el('div', { class: 'empty panel' }, 'No completed evaluation of the current skill matches these filters.'),
-    ))
+    ), `${entries.length} evaluations.`)
   }
 
   function skillCatalogue(sourceRuns = verifiedRuns, params = activeParams) {
@@ -2272,7 +2343,7 @@ if (typeof module !== 'undefined' && module.exports) {
       ),
       visible.length ? el('section', { class: `skill-grid${focused ? ' focused' : ''}` }, visible.map(skillCard)) :
         el('div', { class: 'empty panel' }, 'No tested skills match these filters.'),
-    ))
+    ), `${visible.length} skills.`)
   }
 
   // site-spec: SITE-PAGE-007 ../../spec/site/pages.md#SITE-PAGE-007
@@ -2317,7 +2388,7 @@ if (typeof module !== 'undefined' && module.exports) {
         kpi('Single reporter', evidenceValue(matchingRuns, rows.filter((issue) => reporterCount(issue) === 1).length), 'all verdicts'),
       ),
       el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('div', {}, el('h2', {}, 'Discovered issue catalogue'), el('p', {}, `${shown.length} issues match the reviewed verdict and severity controls.`)), findingControls), el('div', { class: 'panel-body' }, shown.length ? list : el('div', { class: 'empty' }, 'No findings match these filters.'))),
-    ))
+    ), `${shown.length} findings.`)
   }
 
   // site-spec: SITE-PAGE-008 ../../spec/site/pages.md#SITE-PAGE-008
@@ -2345,7 +2416,7 @@ if (typeof module !== 'undefined' && module.exports) {
       historicalNotice(visible),
       comparisonDock(picked, params),
     )
-    frame(content)
+    frame(content, `${visible.length} runs.`)
   }
 
   function sortHeading(label, key, params, numeric = false) {
@@ -2354,7 +2425,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const mark = active ? (params.get('dir') === 'desc' ? ' ↓' : ' ↑') : ''
     return el('th', { class: numeric ? 'num' : '' },
       el('span', { class: 'heading-with-hint' },
-        el('button', { class: 'sort-button', onclick: () => overviewParams(params, { sort: key, dir }), 'aria-label': `Sort by ${label}` }, label + mark),
+        el('button', { class: 'sort-button', id: `run-sort-${key}`, onclick: () => overviewParams(params, { sort: key, dir }), 'aria-label': `Sort by ${label}` }, label + mark),
         metricHints[label] ? hintedLabel('', metricHints[label]) : null,
       ),
     )
@@ -2373,7 +2444,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const body = el('tbody')
     for (const run of items) {
       const checked = picked.includes(run.id)
-      const box = el('input', { type: 'checkbox', checked, 'aria-label': `Select ${run.id} for comparison`, disabled: !checked && picked.length >= 2 })
+      const box = el('input', { id: `compare-run-${encodeURIComponent(run.id)}`, type: 'checkbox', checked, 'aria-label': `Select ${run.id} for comparison`, disabled: !checked && picked.length >= 2 })
       box.addEventListener('change', () => {
         const next = checked ? picked.filter((id) => id !== run.id) : [...picked, run.id]
         overviewParams(params, { pick: next.join(',') })
@@ -2391,14 +2462,14 @@ if (typeof module !== 'undefined' && module.exports) {
       ))
     }
     table.append(body)
-    return el('div', { class: 'table-wrap' }, items.length ? table : el('div', { class: 'empty' }, 'No runs match these filters.'))
+    return el('div', { class: 'table-wrap', id: 'run-table-scroll', 'data-retain-scroll': '' }, items.length ? table : el('div', { class: 'empty' }, 'No runs match these filters.'))
   }
 
   function comparisonDock(picked, params) {
     if (!picked.length) return null
     const names = picked.flatMap((id, index) => [index ? ' ↔ ' : null, hashLink(runs.get(id).toolLabel, runHash(runs.get(id)), 'run-link')])
     const compare = el('button', { class: 'primary', disabled: picked.length !== 2, onclick: () => { location.hash = compareHash(runs.get(picked[0]), runs.get(picked[1])) } }, 'Compare runs')
-    return el('aside', { class: 'compare-dock', 'aria-live': 'polite' }, el('div', {}, el('strong', {}, `${picked.length}/2 selected`), el('span', { class: 'subline' }, names)), el('div', {}, el('button', { onclick: () => overviewParams(params, { pick: '' }) }, 'Clear'), ' ', compare))
+    return el('aside', { class: 'compare-dock', 'aria-live': 'polite' }, el('div', {}, el('strong', {}, `${picked.length}/2 selected`), el('span', { class: 'subline' }, names)), el('div', {}, el('button', { id: 'clear-run-comparison', onclick: () => overviewParams(params, { pick: '' }) }, 'Clear'), ' ', compare))
   }
 
   function chartGrid(items, params) {
@@ -2793,7 +2864,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const list = el('div', { class: 'issue-list' })
     const controls = el('div', { class: 'compact-controls' })
     const filters = { severity: 'all', verdict: 'all', scope: 'all', text: '', file: '', reason: '' }
-    const update = () => {
+    const update = (announce = false) => {
       const q = filters.text.toLowerCase()
       const fileQuery = filters.file.toLowerCase()
       const reasonQuery = filters.reason.toLowerCase()
@@ -2806,16 +2877,17 @@ if (typeof module !== 'undefined' && module.exports) {
         (!reasonQuery || `${issue.verdictReason || ''} ${issue.scopeReason || ''}`.toLowerCase().includes(reasonQuery)),
       )
       list.replaceChildren(...(visible.length ? visible.map((issue) => issueCard(issue)) : [el('div', { class: 'empty' }, 'No judged issues match these filters.')]))
+      if (announce) announceResults(`${visible.length} issues shown.`)
     }
     controls.append(
-      field('Severity', select('issue-severity', [['all', 'All'], ['blocker', 'Blocker'], ['high', 'High'], ['medium', 'Medium'], ['low', 'Low'], ['nit', 'Nit']], 'all', (event) => { filters.severity = event.target.value; update() })),
-      field('Verdict', select('issue-verdict', [['all', 'All'], ['real', 'Real'], ['false-positive', 'False positive'], ['unproven', 'Unproven']], 'all', (event) => { filters.verdict = event.target.value; update() })),
-      field('Scope', select('issue-scope', [['all', 'All'], ['in-scope', 'In scope'], ['out-of-scope', 'Out of scope']], 'all', (event) => { filters.scope = event.target.value; update() })),
+      field('Severity', select('issue-severity', [['all', 'All'], ['blocker', 'Blocker'], ['high', 'High'], ['medium', 'Medium'], ['low', 'Low'], ['nit', 'Nit']], 'all', (event) => { filters.severity = event.target.value; update(true) })),
+      field('Verdict', select('issue-verdict', [['all', 'All'], ['real', 'Real'], ['false-positive', 'False positive'], ['unproven', 'Unproven']], 'all', (event) => { filters.verdict = event.target.value; update(true) })),
+      field('Scope', select('issue-scope', [['all', 'All'], ['in-scope', 'In scope'], ['out-of-scope', 'Out of scope']], 'all', (event) => { filters.scope = event.target.value; update(true) })),
     )
     controls.append(
-      field('Title', el('input', { id: 'issue-search', type: 'search', placeholder: 'Issue title…', oninput: (event) => { filters.text = event.target.value; update() } })),
-      field('File', el('input', { id: 'issue-file', type: 'search', placeholder: 'Path…', oninput: (event) => { filters.file = event.target.value; update() } })),
-      field('Reason', el('input', { id: 'issue-reason', type: 'search', placeholder: 'Verdict or scope reason…', oninput: (event) => { filters.reason = event.target.value; update() } })),
+      field('Title', el('input', { id: 'issue-search', type: 'search', placeholder: 'Issue title…', oninput: (event) => { filters.text = event.target.value; update(true) } })),
+      field('File', el('input', { id: 'issue-file', type: 'search', placeholder: 'Path…', oninput: (event) => { filters.file = event.target.value; update(true) } })),
+      field('Reason', el('input', { id: 'issue-reason', type: 'search', placeholder: 'Verdict or scope reason…', oninput: (event) => { filters.reason = event.target.value; update(true) } })),
     )
     update()
     return el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('div', {}, el('h2', {}, 'Discovered issues'), el('p', {}, !isReviewed(run) ? 'Pending: exact discovery mappings await reconciliation.' : `${run.issues.length} distinct reviewed identities attributed to this run.`)), controls), el('div', { class: 'panel-body' }, list,
@@ -2827,7 +2899,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const suggestionCount = run.claims.filter((claim) => claim.reviewDisposition === 'suggestion').length
     const confirmedLeadCount = run.claims.filter((claim) => claim.reviewDisposition === 'confirmed').length
     const filters = { severity: 'all', text: '' }
-    const update = () => {
+    const update = (announce = false) => {
       const q = filters.text.toLowerCase()
       const visible = run.claims.filter((claim) => (filters.severity === 'all' || claim.severity === filters.severity) && (!q || `${claim.title} ${claim.file || ''} ${claim.claim || ''}`.toLowerCase().includes(q)))
       list.replaceChildren(...(visible.length ? visible.map((claim) => el('article', { class: 'issue' },
@@ -2838,10 +2910,11 @@ if (typeof module !== 'undefined' && module.exports) {
           claim.selfRejected ? badge('self-rejected', 'unproven') : null),
         el('p', {}, claim.claim || ''),
       )) : [el('div', { class: 'empty' }, 'No extracted claims match these filters.')]))
+      if (announce) announceResults(`${visible.length} extracted claims shown.`)
     }
     const claimSeverities = [...new Set(run.claims.map((claim) => claim.severity).filter(Boolean))].sort()
-    const severity = select('claim-severity', [['all', 'All severities'], ...claimSeverities.map((value) => [value, value])], 'all', (event) => { filters.severity = event.target.value; update() })
-    const search = el('input', { id: 'claim-search', type: 'search', placeholder: 'File, title, or claim…', oninput: (event) => { filters.text = event.target.value; update() } })
+    const severity = select('claim-severity', [['all', 'All severities'], ...claimSeverities.map((value) => [value, value])], 'all', (event) => { filters.severity = event.target.value; update(true) })
+    const search = el('input', { id: 'claim-search', type: 'search', placeholder: 'File, title, or claim…', oninput: (event) => { filters.text = event.target.value; update(true) } })
     update()
     const description = suggestionCount
       ? `${run.claims.length} extracted claims: ${confirmedLeadCount} Codex-confirmed leads and ${suggestionCount} suggestions. Suggestions receive no automatic fix or confirmed gold credit.`
@@ -2855,6 +2928,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const input = el('input', { type: 'search', placeholder: 'Filter matching lines…', 'aria-label': `Search ${title}`, oninput: (event) => {
       const q = event.target.value.toLowerCase()
       output.textContent = q ? source.split('\n').filter((line) => line.toLowerCase().includes(q)).join('\n') || 'No matching lines.' : source || 'Unavailable'
+      announceResults(`${title} updated.`)
     } })
     return el('details', { class: 'raw', open: open ? '' : null }, el('summary', {}, title, note ? ` · ${note}` : ''), el('div', { class: 'raw-tools' }, input), output)
   }
@@ -2938,7 +3012,7 @@ if (typeof module !== 'undefined' && module.exports) {
       const deltaText = delta == null ? 'N/A' : `${delta > 0 ? '+' : ''}${kind === 'money' ? fmt(delta, 'money') : kind === 'percent' ? (delta * 100).toFixed(1) + ' pp' : kind === 'minutes' ? fmt(delta, 'minutes') : fmt(delta)}`
       body.append(el('tr', {}, el('td', {}, metricLabel(label)), el('td', { class: 'num' }, fmt(a, kind)), el('td', { class: 'num' }, fmt(b, kind)), el('td', { class: `num delta ${quality}` }, deltaText), el('td', { class: 'num' }, fmt(ratio, 'ratio'))))
     }
-    return el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('div', {}, el('h2', {}, 'Metric deltas'), el('p', {}, 'Delta and ratio are right relative to left.'))), el('div', { class: 'table-wrap' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Metric'), el('th', { class: 'num' }, 'Left'), el('th', { class: 'num' }, 'Right'), el('th', { class: 'num' }, metricLabel('Δ')), el('th', { class: 'num' }, metricLabel('Ratio')))), body)))
+    return el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('div', {}, el('h2', {}, 'Metric deltas'), el('p', {}, 'Delta and ratio are right relative to left.'))), el('div', { class: 'table-wrap', id: 'metric-deltas-scroll', 'data-retain-scroll': '' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Metric'), el('th', { class: 'num' }, 'Left'), el('th', { class: 'num' }, 'Right'), el('th', { class: 'num' }, metricLabel('Δ')), el('th', { class: 'num' }, metricLabel('Ratio')))), body)))
   }
 
   function comparisonCharts(left, right) {
