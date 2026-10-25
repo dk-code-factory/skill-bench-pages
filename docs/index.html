@@ -443,6 +443,14 @@ pre { max-height: 560px; margin: 0; padding: 1rem 1.1rem; overflow: auto; border
 }
 
 .inline-comparison { position: static; width: 100%; max-width: none; margin-top: 1rem; }
+
+.evidence-context { display: block; margin: 1rem 0; }
+.evidence-context p { margin: .5rem 0 0; line-height: 1.5; }
+.evidence-sample { display: block; color: var(--text); }
+.evidence-limits { color: var(--warn); }
+.evidence-authority, .cost-basis { color: var(--muted); font-size: .78rem; line-height: 1.45; }
+.shortlist-card .cost-basis { margin-top: .3rem; }
+.model-comparison-table .cost-basis { max-width: 18rem; white-space: normal; }
 </style>
 </head>
 <body>
@@ -794,7 +802,7 @@ if (typeof module !== 'undefined' && module.exports) {
     'Evidence': 'Matched benchmark attempts in the selected scope, including unsuccessful attempts. Salvaged discovery-only records are excluded from both comparison scopes.',
     'Median known cost': 'Median recorded benchmark cost across matched attempts with recorded cost.',
     'Median runtime': 'Median recorded wall-clock time across matched attempts with recorded runtime.',
-    'Recorded total': 'Total recorded benchmark spend across every matched attempt; no vendor list prices are used.',
+    'Benchmark total': 'Total benchmark review cost across every matched attempt. Each row discloses recorded amounts, frozen API estimates and unavailable observations.',
     'PR-introduced real': 'Discovered real issues introduced by the pull request under review.',
     'Ratio': 'Right value divided by left value.',
     'Real': 'Distinct judged issues attributed to the run and adjudicated real within its cohort.',
@@ -1370,6 +1378,42 @@ if (typeof module !== 'undefined' && module.exports) {
     return run.modelLabel ? `${run.modelLabel} (${run.modelProvenance})` : 'Model unavailable'
   }
 
+  function costBasisText(observations) {
+    if (!observations.length) return 'No cost observations.'
+    const known = observations.filter((entry) => Number.isFinite(entry.costUsd))
+    const estimated = known.filter((entry) => entry.source === 'api-estimate').length
+    const unsourced = known.filter((entry) => !entry.source || entry.source === 'unavailable').length
+    const coverage = Metrics.costSummary(observations).costCoverage
+    return `Cost basis: ${known.length - estimated - unsourced} recorded · ${estimated} API-estimated · ${observations.length - known.length} unavailable${unsourced ? ` · ${unsourced} known amount with source unavailable` : ''}. ${coverage.knownCount}/${coverage.totalCount} amounts available; ${fmt(coverage.knownSubtotalUsd, 'money')} known subtotal.`
+  }
+
+  const runCostBasis = (rows) => costBasisText(rows.map((run) => ({ costUsd: run.usage.costUsd, source: run.usage.sources.costUsd })))
+  const canonicalCostBasis = (evidence) => costBasisText(evidence.map((source) => ({ costUsd: source.costUsd, source: runs.get(resolveRunId(source.runId))?.usage.sources.costUsd })))
+
+  // site-spec: SITE-PAGE-016 ../../spec/site/pages.md#SITE-PAGE-016
+  function benchmarkContext(rows) {
+    const prs = new Set()
+    const byLanguage = new Map()
+    for (const run of rows) {
+      const target = targetForRun(run)
+      const id = target.prUrl || run.targetId
+      prs.add(id)
+      const language = target.language || 'Language unavailable'
+      if (!byLanguage.has(language)) byLanguage.set(language, new Set())
+      byLanguage.get(language).add(id)
+    }
+    const languages = [...byLanguage].sort(([a], [b]) => a.localeCompare(b)).map(([language, ids]) => `${language}: ${ids.size} PR${ids.size === 1 ? '' : 's'}`).join(' · ')
+    const models = new Set(rows.map((run) => run.modelId).filter(Boolean)).size
+    const unknownModels = rows.filter((run) => !run.modelId).length
+    const revisions = new Set(rows.map((run) => run.revisionKey).filter(Boolean)).size
+    return el('aside', { class: 'notice evidence-context', 'aria-label': 'Benchmark evidence context' },
+      el('strong', { class: 'evidence-sample' }, `${prs.size} PR${prs.size === 1 ? '' : 's'} · ${rows.length} review attempt${rows.length === 1 ? '' : 's'} · ${models} requested model${models === 1 ? '' : 's'}${unknownModels ? ` · ${unknownModels} attempts with model unavailable` : ''} · ${revisions} recorded revision${revisions === 1 ? '' : 's'}`),
+      el('p', { class: 'evidence-limits' }, rows.length ? `Small benchmark sample — ${languages}. Repetitions are additional attempts on these PRs. Results do not establish performance on other codebases or languages.` : 'No benchmark attempts match this selection; there is no sample supporting a recommendation.'),
+      el('p', { class: 'evidence-authority' }, 'Reviewed discovery combines reports about the same defect on matching PR revisions. Coverage is the share of real findings observed in the comparison population. Versions shown come from frozen benchmark snapshots.'),
+      el('p', { class: 'cost-basis' }, 'All selected attempts. ', runCostBasis(rows), ' API estimates use frozen token rates, independent of subscription billing. ', rows.length ? runSetLink(rows, 'Inspect attempts and pricing details') : null),
+    )
+  }
+
   function discoveryNotice(rows) {
     const pending = rows.filter((run) => !isReviewed(run))
     const spend = (items) => items.every((run) => run.usage.costUsd != null) ? total(items, (run) => run.usage.costUsd) : null
@@ -1459,6 +1503,7 @@ if (typeof module !== 'undefined' && module.exports) {
       el('strong', {}, value),
       el('p', {}, note),
       skillVersionFooter(group),
+      el('p', { class: 'cost-basis' }, 'Reviewed attempts. ', runCostBasis(group.reviewedRows)),
     )
   }
 
@@ -1491,7 +1536,6 @@ if (typeof module !== 'undefined' && module.exports) {
     }
     const comparison = el('input', { id: `shortlist-compare-${encodeURIComponent(group.id)}`, type: 'checkbox', checked, disabled: !checked && selected.length >= 5, 'aria-label': `Compare ${group.label}`, onchange: (event) => setComparison(params, group.id, event.target.checked) })
     const reviewedTargets = new Set(group.reviewedRows.map((run) => run.targetId)).size
-    const costBasis = group.reviewedRows.some((run) => run.usage.sources.costUsd === 'api-estimate') ? 'reviewed cost, includes API estimates' : 'reviewed recorded cost'
     return el('article', { class: 'rank-card shortlist-card', 'data-skill-id': group.id },
       el('div', { class: 'rank-number' }, `#${rank}`),
       el('h3', {}, hashLink(group.label, skillHash(group.id))),
@@ -1504,7 +1548,8 @@ if (typeof module !== 'undefined' && module.exports) {
         priority !== 'value' ? el('div', {}, el('dt', {}, 'Real / $'), el('dd', {}, fmt(group.scopedFindingsPerDollar))) : null,
         priority !== 'speed' ? el('div', {}, el('dt', {}, 'Minutes / finding'), el('dd', {}, fmt(group.scopedMinutesPerFinding))) : null,
       ),
-      el('p', {}, `${group.reviewedRows.length} reviewed attempt${group.reviewedRows.length === 1 ? '' : 's'} · ${reviewedTargets} target${reviewedTargets === 1 ? '' : 's'} · ${fmt(group.cost, 'money')} ${costBasis}`),
+      el('p', {}, `${group.reviewedRows.length} reviewed attempt${group.reviewedRows.length === 1 ? '' : 's'} · ${reviewedTargets} target${reviewedTargets === 1 ? '' : 's'} · ${fmt(group.cost, 'money')} reviewed benchmark spend`),
+      el('p', { class: 'cost-basis' }, 'Reviewed attempts. ', runCostBasis(group.reviewedRows)),
       group.pendingRows.length ? el('p', {}, `${group.pendingRows.length} pending attempt${group.pendingRows.length === 1 ? '' : 's'} excluded from recommendation metrics.`) : null,
       skillVersionFooter({ rows: group.reviewedRows }),
       el('div', { class: 'shortlist-actions' },
@@ -1590,6 +1635,7 @@ if (typeof module !== 'undefined' && module.exports) {
         el('div', { class: 'constraint-heading' }, el('h2', { id: 'constraints-title' }, 'Start with your constraints'), el('p', {}, 'Choose what you can run and what matters most. Severity applies to the findings counted in every recommendation.')),
         el('div', { class: 'leader-pickers constraint-controls' }, selectedModelPicker, languagePicker, priorityPicker, completenessPicker),
       ),
+      benchmarkContext(leaderRuns),
       discoveryNotice(leaderRuns),
       leaderRuns.length ? null : el('div', { class: 'notice info evidence-note' }, 'No completed benchmark runs match these filters. Experimental reports do not contribute to benchmark rankings.'),
       el('section', { class: 'landing-section shortlist-section', 'aria-labelledby': 'shortlist-title' },
@@ -1647,7 +1693,7 @@ if (typeof module !== 'undefined' && module.exports) {
             `${group.completenessBreakdown[completenessScope].found} discovered real findings in the selected count`,
           ))),
         ),
-        el('p', { class: 'method-note' }, 'Model, count, and language apply to every leader calculation. Completeness means the share of distinct discovered real findings found on the selected targets a skill reviewed. Cohort-local judgements are not canonical gold. This is a small benchmark: three pull requests, one per language.'),
+        el('p', { class: 'method-note' }, 'Model, count, and language apply to every leader calculation. Completeness means the share of distinct discovered real findings found on the selected targets a skill reviewed. Cohort-local judgements are not canonical gold.'),
       ),
       ),
       el('details', { class: 'landing-section analysis-disclosure', id: 'skill-guide', 'data-retain-open': '' },
@@ -2004,7 +2050,8 @@ if (typeof module !== 'undefined' && module.exports) {
         el('p', {}, 'Separately tested skills on the same pinned PRs. Canonical gold credit is shown here without adding a model to the ranking; cohort-local judgments remain separate. Codex judgment tokens have no USD receipt.'))),
       el('div', { class: 'panel-body' }, rows.map((row) => el('article', { class: 'supplemental-skill' },
         el('h3', {}, hashLink(tools.get(row.skillId)?.label || row.skillId, skillHash(row.skillId))),
-        el('p', {}, `${row.modelLabel || row.label} · ${row.attempts} review cells · ${row.real} / ${row.possible} canonical real · ${fmt(row.cost, 'money')} recorded review spend`),
+        el('p', {}, `${row.modelLabel || row.label} · ${row.attempts} review cells · ${row.real} / ${row.possible} canonical real · ${fmt(row.cost, 'money')} benchmark review spend`),
+        el('p', { class: 'cost-basis' }, canonicalCostBasis(row.evidence)),
         comparisonRunLink(row.evidence, 'View exact runs'),
       ))),
     )
@@ -2027,7 +2074,7 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   function modelWinnerCard(title, winner, value, note) {
-    return el('article', { class: 'model-winner-card' }, el('span', {}, title), el('h3', {}, winner?.label || 'No recorded result'), el('strong', {}, winner ? value(winner) : 'N/A'), el('p', {}, winner ? note(winner) : 'No evidence matches the current filters.'))
+    return el('article', { class: 'model-winner-card' }, el('span', {}, title), el('h3', {}, winner?.label || 'No recorded result'), el('strong', {}, winner ? value(winner) : 'N/A'), el('p', {}, winner ? note(winner) : 'No evidence matches the current filters.'), winner ? el('p', { class: 'cost-basis' }, canonicalCostBasis(winner.evidence)) : null)
   }
 
   const modelStatSorts = {
@@ -2086,7 +2133,8 @@ if (typeof module !== 'undefined' && module.exports) {
     return [
       el('td', { class: 'num' }, fmt(row.realPerDollar)),
       el('td', { class: 'num' }, row.cost == null ? 'Unavailable' : fmt(row.cost, 'money'),
-        row.cost == null ? el('span', { class: 'subline cost-coverage' }, `${fmt(row.costCoverage.knownSubtotalUsd, 'money')} known subtotal · ${row.costCoverage.knownCount}/${row.costCoverage.totalCount} costs measured`) : null),
+        row.cost == null ? el('span', { class: 'subline cost-coverage' }, `${fmt(row.costCoverage.knownSubtotalUsd, 'money')} known subtotal · ${row.costCoverage.knownCount}/${row.costCoverage.totalCount} costs measured`) : null,
+        el('span', { class: 'subline cost-basis' }, canonicalCostBasis(row.evidence))),
       el('td', { class: 'num' }, fmt(row.medianCost, 'money')),
       el('td', { class: 'num' }, hasEvidence ? el('a', { href: evidenceHref, class: 'canonical-evidence-link',
         'aria-label': evidenceLabel }, fmt(row.real)) : 'N/A'),
@@ -2112,7 +2160,7 @@ if (typeof module !== 'undefined' && module.exports) {
       ))
     }
     const headings = [
-      ['Model', 'model'], ['Real / $', 'value'], ['Recorded total', 'totalCost'], ['Median known cost', 'medianCost'], ['Canonical real', 'real'], ['High + med', 'highMedium'], ['Precision', 'precision'], ['Completeness', 'completeness'], ['Cost / real', 'costPerReal'], ['Median runtime', 'wall'], ['Success', 'success'], ['Evidence', 'evidence'],
+      ['Model', 'model'], ['Real / $', 'value'], ['Benchmark total', 'totalCost'], ['Median known cost', 'medianCost'], ['Canonical real', 'real'], ['High + med', 'highMedium'], ['Precision', 'precision'], ['Completeness', 'completeness'], ['Cost / real', 'costPerReal'], ['Median runtime', 'wall'], ['Success', 'success'], ['Evidence', 'evidence'],
     ]
     return el('div', { class: 'table-wrap model-table-wrap', id: 'canonical-model-scroll', 'data-retain-scroll': '' }, el('table', { class: 'model-comparison-table' }, el('thead', {}, el('tr', {}, headings.map(([label, key]) => modelSortHeading(label, key, params, modelMetricHints[label] || metricHints[label])))), body))
   }
@@ -2161,6 +2209,10 @@ if (typeof module !== 'undefined' && module.exports) {
     const costWinner = modelWinner(stats.filter((row) => row.cost != null), (row) => row.medianCost, 1)
     const runtimeWinner = modelWinner(stats, (row) => row.medianWall, 1)
     const legacyPresent = stats.some((row) => row.legacy)
+    const matchedEvidence = [...new Map(stats.flatMap((row) => row.evidence).map((source) => [sourceIdentity(source), source])).values()]
+    const matchedPrs = new Set(matchedEvidence.map((source) => source.targetId).filter(Boolean)).size
+    const matchedModels = stats.filter((row) => row.evidence.length).length
+    const matchedSample = matchedEvidence.length ? `Matched evidence: ${matchedPrs} PR${matchedPrs === 1 ? '' : 's'} · ${matchedEvidence.length} matched attempt${matchedEvidence.length === 1 ? '' : 's'} · ${matchedModels} model${matchedModels === 1 ? '' : 's'}. Small sample of pinned PRs; repetitions reuse these cases.` : 'No matched canonical attempts for these filters.'
     const issueUrl = snapshot.issueUrl || 'https://github.com/dkropachev/automated-development/issues/42'
     const modelScopes = snapshot.scopes.filter((item) => !item.id.startsWith('supplemental-'))
     const scopePicker = field('Benchmark scope', select('model-scope', modelScopes.map((item) => [item.id, comparisonScopeName(item)]), scope.id, (event) => {
@@ -2174,11 +2226,11 @@ if (typeof module !== 'undefined' && module.exports) {
       modelComparisonFilterBar(params, snapshot, scope),
       legacyPresent ? el('div', { class: 'notice model-legacy-warning', role: 'note' }, 'Claude Opus 5 is historical/inferred: its request, effort, target pins, prompts, and accounting were not fully recorded. Salvaged reports can expand the canonical gold set but never receive detection credit. ', externalLink('Track the controlled 19-cell rerun in issue #42 ↗', issueUrl)) : null,
       stats.length ? el('section', { class: 'panel model-results-panel', id: 'model-ranking', tabindex: -1 },
-        el('div', { class: 'panel-head' }, el('div', {}, el('h2', {}, 'Model ranking'), el('p', {}, `${comparisonScopeLabel(scope, params)}. Only matched model evidence affects this ranking; separately tested skills appear on the Skills tab.`))),
+        el('div', { class: 'panel-head' }, el('div', {}, el('h2', {}, 'Model ranking'), el('p', { class: 'canonical-sample' }, matchedSample), el('p', {}, `${comparisonScopeLabel(scope, params)}. Canonical gold is a separately reviewed, accepted and sealed issue set. Only its declared matched attempts affect this ranking. Every model uses the same real-issue denominator on selected targets; skill filters change detections, not that denominator. New completed cohorts remain discovery evidence until a new gold snapshot is accepted.`))),
         modelComparisonTable(stats, params),
       ) : null,
       stats.length ? el('section', { class: 'model-winners', 'aria-label': 'Model comparison winners' },
-        modelWinnerCard('Best value', valueWinner, (row) => `${fmt(row.realPerDollar)} real / $`, (row) => `${row.real} canonical real · ${fmt(row.cost, 'money')} recorded total`),
+        modelWinnerCard('Best value', valueWinner, (row) => `${fmt(row.realPerDollar)} real / $`, (row) => `${row.real} canonical real · ${fmt(row.cost, 'money')} benchmark total`),
         modelWinnerCard('Most complete', completenessWinner, (row) => fmt(row.completeness, 'percent'), (row) => `${row.real} of ${row.possible} canonical real issues`),
         modelWinnerCard('Lowest median cost', costWinner, (row) => fmt(row.medianCost, 'money'), (row) => `${row.attempts} matched attempt${row.attempts === 1 ? '' : 's'}`),
         modelWinnerCard('Fastest median runtime', runtimeWinner, (row) => fmt(row.medianWall, 'minutes'), (row) => `${fmt(row.successRate, 'percent')} success rate`),
@@ -2209,6 +2261,7 @@ if (typeof module !== 'undefined' && module.exports) {
     }
     return el('section', { 'data-result-summary': `${groups.length} discovered models.`, class: 'panel' },
       el('div', { class: 'panel-head' }, el('div', {}, el('h2', {}, 'Discovered coverage'), el('p', {}, 'Reviewed discovery across completed, hash-verified runs for the selected skills, targets, and languages. Pending runs are excluded from discovery scores and denominators. This panel does not change the sealed canonical model score.'))),
+      benchmarkContext(eligible),
       discoveryNotice(eligible),
       eligible.length ? el('div', { class: 'table-wrap', id: 'discovered-model-scroll', 'data-retain-scroll': '' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Model'), el('th', { class: 'num' }, 'Distinct real'), el('th', { class: 'num' }, 'Discovered coverage'), el('th', { class: 'num' }, 'Pending runs'), el('th', { class: 'num' }, 'Runs'))), body)) : el('div', { class: 'empty' }, 'No completed benchmark runs match these filters.'),
     )
@@ -2228,7 +2281,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const base = verifiedRuns.filter((run) => matchesOverviewDimensions(run, params))
     if (!base.length) return frame(el('div', {},
       compactHero('Choose a reviewer', 'No completed benchmark results for these filters.', 'Experimental reports remain available separately and do not contribute to benchmark rankings.'),
-      chooseTabs(params, 'skills'), filterBar(params),
+      chooseTabs(params, 'skills'), filterBar(params), benchmarkContext(base),
     ), '0 candidates.')
     const requestedGroup = params.get('group') || 'skill'
     const groupBy = ['skill', 'skillModel', 'language'].includes(requestedGroup) ? requestedGroup : 'skill'
@@ -2248,6 +2301,7 @@ if (typeof module !== 'undefined' && module.exports) {
       compactHero('Choose a reviewer', 'Find the right skill for your constraints.', 'Rank skills, models under test, and languages using discovered quality, cost, and reliability. Every result retains its evidence count.'),
       chooseTabs(params, 'skills'),
       filterBar(params),
+      benchmarkContext(base),
       el('section', { class: 'kpis decision-kpis' },
         kpi('Candidates', fmt(groups.length), groupBy.replace('skillModel', 'skill + model')),
         kpi('Evidence', runCountLink(base, fmt(base.length)), 'runs in current slice'),
@@ -2256,7 +2310,7 @@ if (typeof module !== 'undefined' && module.exports) {
       ),
       el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('div', {}, el('h2', {}, 'Decision leaderboard'), el('p', {}, 'Best value means distinct reviewed real findings per dollar, the same measure used on Summary. Costs include reviewed failed and zero-yield attempts; pending spend is excluded.')), controls), leaderboard(groups, params, groupBy)),
       supplementalSkillPanel(params),
-      el('div', { class: 'notice info evidence-note' }, 'Model quality is grouped by the explicitly requested model under test. Observed runtime model stacks remain visible as execution metadata and do not control this filter. Language results are directional because the current benchmark has one target per language.'),
+      el('div', { class: 'notice info evidence-note' }, 'Model quality is grouped by the explicitly requested model under test. Observed runtime model stacks remain visible as execution metadata and do not control this filter. Language evidence is limited to the selected PR sample shown above.'),
       comparisonTray(selected, params),
     ), `${groups.length} candidates.`)
   }
@@ -2899,6 +2953,7 @@ if (typeof module !== 'undefined' && module.exports) {
       historicalNotice([run]),
       runSummary(run, target),
       el('h2', {}, 'Cohort-local quality'),
+      el('p', { class: 'local-authority method-note' }, 'Original verdicts from this one benchmark measurement. These counts can repeat a defect across runs and differ from reviewed cross-run discoveries or the separately sealed canonical gold.'),
       runMetrics(run),
       !isReviewed(run) ? el('div', { class: 'notice info' }, 'Pending: reviewed discovery metrics await batch reconciliation.') : null,
       issueSection(run),
