@@ -451,6 +451,35 @@ pre { max-height: 560px; margin: 0; padding: 1rem 1.1rem; overflow: auto; border
 .evidence-authority, .cost-basis { color: var(--muted); font-size: .78rem; line-height: 1.45; }
 .shortlist-card .cost-basis { margin-top: .3rem; }
 .model-comparison-table .cost-basis { max-width: 18rem; white-space: normal; }
+
+.decision-cards, .mobile-model-sorting, .mobile-direction { display: none; }
+.metric-table-disclosure > summary { padding: .85rem 1rem; cursor: pointer; color: var(--accent-2); }
+.decision-card { min-width: 0; padding: 1rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.decision-card h3 { margin: 0; line-height: 1.35; overflow-wrap: anywhere; }
+.decision-card h3 a { color: var(--text); }
+.decision-card .skill-version { color: var(--muted); font-size: .82rem; }
+.decision-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .9rem; margin: 1rem 0; }
+.decision-facts > div { min-width: 0; }
+.decision-facts dt { color: var(--muted); font-size: .82rem; }
+.decision-facts dd { margin: .3rem 0 0; color: var(--text); font-size: 1.15rem; font-weight: 700; overflow-wrap: anywhere; }
+.decision-metric-details > summary { padding: .65rem 0; color: var(--accent-2); cursor: pointer; }
+.decision-card .compare-choice { min-height: 2.75rem; }
+@media (min-width: 701px) {
+  .metric-table-disclosure[open] > summary { display: none; }
+}
+@media (max-width: 700px) {
+  .field { min-width: 0; }
+  .field select { min-width: 0; max-width: 100%; width: 100%; }
+  .controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .decision-cards { display: grid; gap: .8rem; padding: .8rem; }
+  .mobile-direction { display: grid; grid-column: 1 / -1; }
+  .decision-controls { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .decision-controls .field { min-width: 0; }
+  .mobile-model-sorting { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; padding: .8rem; }
+  .mobile-model-sorting .field { min-width: 0; }
+  html { scroll-behavior: auto; scroll-padding-bottom: 16rem; }
+  main:has(.compare-dock:not(.inline-comparison)) { padding-bottom: 8rem; }
+}
 </style>
 </head>
 <body>
@@ -716,6 +745,7 @@ if (typeof module !== 'undefined' && module.exports) {
   let activePath = 'home'
   let activeParams = new URLSearchParams()
   let pendingInteraction = null
+  const narrowLayout = window.matchMedia('(max-width: 700px)')
   window.history.scrollRestoration = 'manual'
 
   const el = (tag, attrs = {}, ...children) => {
@@ -1728,6 +1758,56 @@ if (typeof module !== 'undefined' && module.exports) {
     )
   }
 
+  const discoveryValueHint = 'Distinct reviewed real findings divided by all reviewed attempt costs, including failed and zero-yield attempts. Unknown reviewed costs make value unavailable. Pending spend is excluded.'
+
+  function decisionFacts(items) {
+    return el('dl', { class: 'decision-facts' }, items.map(([key, label, value, hint]) =>
+      el('div', {}, el('dt', {}, hintedLabel(label, hint)), el('dd', { 'data-metric': key }, value))))
+  }
+
+  function decisionDetails(id, label, items) {
+    return items.length ? el('details', { class: 'decision-metric-details', id, 'data-retain-open': '' },
+      el('summary', { id: `${id}-toggle`, 'aria-label': `More metrics for ${label}` }, 'More metrics'), decisionFacts(items)) : null
+  }
+
+  // site-spec: SITE-PAGE-017 ../../spec/site/pages.md#SITE-PAGE-017
+  function responsiveDecisions(id, cards, table, controls = null) {
+    return el('div', { class: 'responsive-decisions' }, controls,
+      el('div', { class: 'decision-cards', id: `${id}-cards` }, cards),
+      el('details', { class: 'metric-table-disclosure', id: `${id}-table`, 'data-retain-open': '', open: narrowLayout.matches ? null : '' },
+        el('summary', { id: `${id}-table-toggle` }, 'Full metric table'), table))
+  }
+
+  function leaderboardCard(group, index, params, groupBy) {
+    const key = decisionSortKey(params)
+    const primary = new Set(['value', 'completeness', 'cost', key])
+    const facts = [
+      ['value', 'Real / $', fmt(discoveryValue(group, group.realPerDollar)), discoveryValueHint],
+      ['completeness', 'Completeness', fmt(discoveryValue(group, group.completeness), 'percent')],
+      ['cost', 'Median known cost / run', fmt(group.medianCost, 'money')],
+      ['realPerRun', 'Real / run', fmt(discoveryValue(group, group.realPerRun))],
+      ['highMedium', 'High + med', fmt(discoveryValue(group, group.highMedium))],
+      ['precision', 'Precision', fmt(discoveryValue(group, group.precision), 'percent')],
+      ['costPerReal', 'Cost / real', fmt(discoveryValue(group, group.costPerReal), 'money')],
+      ['success', 'Success', fmt(group.successRate, 'percent')],
+    ]
+    const selected = selectionFrom(params)
+    const checked = selected.includes(group.id)
+    const box = groupBy === 'skill' ? el('input', { id: `card-compare-${encodeURIComponent(group.id)}`, type: 'checkbox', checked, disabled: !checked && selected.length >= 5, 'aria-label': `Compare ${group.label}`, onchange: (event) => setComparison(params, group.id, event.target.checked) }) : null
+    return el('article', { class: 'decision-card leaderboard-decision-card', 'data-candidate': group.id, 'aria-label': `${group.label} decision summary` },
+      el('h3', {}, `${index + 1}. `, runSetLink(group.rows, group.label)),
+      el('p', { class: 'subline' }, `${group.dimension} · ${group.coverage} targets · `, runCountLink(group.rows), group.pendingRows.length ? ` · ${group.pendingRows.length} pending` : ''),
+      experimentalToolBadge(group.rows), group.coverage < 2 ? badge('low evidence', 'unproven') : null,
+      decisionFacts(facts.filter(([name]) => primary.has(name))),
+      el('p', { class: 'cost-basis' }, 'Reviewed attempts. ', runCostBasis(group.reviewedRows)),
+      group.skillIds.length === 1 ? skillVersionFooter(group) : null,
+      decisionDetails(`candidate-metrics-${encodeURIComponent(group.id)}`, group.label, facts.filter(([name]) => !primary.has(name))),
+      el('div', { class: 'shortlist-actions' },
+        box ? el('label', { class: 'compare-choice', for: box.id }, box, 'Compare') : null,
+        hashLink('Evidence', runsHash(group.rows), 'button-link decision-evidence'),
+        group.skillIds.length === 1 ? hashLink('Setup', skillHash(group.skillIds[0]), 'button-link decision-setup') : null))
+  }
+
   function decisionSortHeading(label, key, params, numeric = false, hint = metricHints[label]) {
     const active = decisionSortKey(params) === key
     const defaultDirection = decisionSorts[key][1]
@@ -1772,7 +1852,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const table = el('table', {}, el('thead', {}, el('tr', {},
       el('th', { scope: 'col' }, 'Compare'),
       decisionSortHeading('Candidate', 'candidate', params),
-      decisionSortHeading('Real / $', 'value', params, true, 'Distinct reviewed real findings divided by all reviewed attempt costs, including failed and zero-yield attempts. Unknown reviewed costs make value unavailable. Pending spend is excluded.'),
+      decisionSortHeading('Real / $', 'value', params, true, discoveryValueHint),
       decisionSortHeading('Cost', 'cost', params, true),
       decisionSortHeading('Real / run', 'realPerRun', params, true),
       decisionSortHeading('High + med', 'highMedium', params, true),
@@ -1781,7 +1861,8 @@ if (typeof module !== 'undefined' && module.exports) {
       decisionSortHeading('Cost / real', 'costPerReal', params, true),
       decisionSortHeading('Success', 'success', params, true),
     )), body)
-    return el('div', { class: 'table-wrap', id: 'leaderboard-scroll', 'data-retain-scroll': '' }, groups.length ? table : el('div', { class: 'empty' }, 'No benchmark evidence matches these filters.'))
+    const fullTable = el('div', { class: 'table-wrap', id: 'leaderboard-scroll', 'data-retain-scroll': '' }, groups.length ? table : el('div', { class: 'empty' }, 'No benchmark evidence matches these filters.'))
+    return responsiveDecisions('leaderboard', groups.map((group, index) => leaderboardCard(group, index, params, groupBy)), fullTable)
   }
 
   function comparisonList(value) {
@@ -2092,6 +2173,46 @@ if (typeof module !== 'undefined' && module.exports) {
     evidence: [(row) => row.attempts, -1],
   }
 
+  const modelDecisionHeadings = [
+    ['Model', 'model'], ['Real / $', 'value'], ['Benchmark total', 'totalCost'], ['Median known cost', 'medianCost'], ['Canonical real', 'real'], ['High + med', 'highMedium'], ['Precision', 'precision'], ['Completeness', 'completeness'], ['Cost / real', 'costPerReal'], ['Median runtime', 'wall'], ['Success', 'success'], ['Evidence', 'evidence'],
+  ]
+
+  function modelSortKey(params) { return Object.hasOwn(modelStatSorts, params.get('modelSort')) ? params.get('modelSort') : 'value' }
+  function modelSortDirection(key, value) { return value === 'asc' ? 1 : value === 'desc' ? -1 : modelStatSorts[key][1] }
+
+  function modelMobileSorting(params) {
+    const key = modelSortKey(params)
+    const direction = modelSortDirection(key, params.get('modelDir'))
+    return el('div', { class: 'mobile-model-sorting' },
+      field('Sort models by', select('model-sort-mobile', modelDecisionHeadings.map(([label, name]) => [name, label]), key, (event) => controlNavigate(comparisonParams(params, { modelSort: event.target.value === 'value' ? '' : event.target.value, modelDir: '' })))),
+      field('Order', select('model-order-mobile', [['desc', 'Descending'], ['asc', 'Ascending']], direction === 1 ? 'asc' : 'desc', (event) => controlNavigate(comparisonParams(params, { modelDir: event.target.value === (modelStatSorts[key][1] === 1 ? 'asc' : 'desc') ? '' : event.target.value })))))
+  }
+
+  function modelComparisonCard(row, index, params) {
+    const primary = new Set(['value', 'completeness', 'totalCost', modelSortKey(params)])
+    const href = comparisonParams(params, { evidenceModel: row.id, evidenceVerdict: 'real' })
+    const facts = [
+      ['value', 'Real / $', fmt(row.realPerDollar), modelMetricHints['Real / $']],
+      ['completeness', 'Completeness', fmt(row.completeness, 'percent'), modelMetricHints.Completeness],
+      ['totalCost', 'Benchmark total', row.cost == null ? 'Unavailable' : fmt(row.cost, 'money')],
+      ['medianCost', 'Median known cost', fmt(row.medianCost, 'money')],
+      ['real', 'Canonical real', row.attempts ? el('a', { href, class: 'decision-canonical-evidence' }, fmt(row.real)) : 'N/A'],
+      ['highMedium', 'High + med', fmt(row.highMedium), modelMetricHints['High + med']],
+      ['precision', 'Precision', fmt(row.precision, 'percent'), modelMetricHints.Precision],
+      ['costPerReal', 'Cost / real', fmt(row.costPerReal, 'money'), modelMetricHints['Cost / real']],
+      ['wall', 'Median runtime', fmt(row.medianWall, 'minutes')],
+      ['success', 'Success', fmt(row.successRate, 'percent'), modelMetricHints.Success],
+      ['evidence', 'Matched attempts', comparisonRunLink(row.evidence, fmt(row.attempts))],
+    ]
+    return el('article', { class: 'decision-card canonical-decision-card', 'data-candidate': row.id, 'aria-label': `${row.label} canonical summary` },
+      el('h3', {}, `${index + 1}. ${row.label}`), el('p', { class: 'subline' }, row.provenance), row.legacy ? badge('historical', 'unproven') : null,
+      decisionFacts(facts.filter(([key]) => primary.has(key))),
+      row.attempts ? el('p', { class: 'subline' }, `${row.real} / ${row.possible} canonical real · ${row.attempts} matched attempts`) : null,
+      el('p', { class: 'cost-basis' }, canonicalCostBasis(row.evidence)),
+      decisionDetails(`model-metrics-${encodeURIComponent(row.id)}`, row.label, facts.filter(([key]) => !primary.has(key))),
+      el('div', { class: 'shortlist-actions' }, el('a', { href, class: 'button-link decision-canonical-evidence' }, 'Canonical evidence'), comparisonRunLink(row.evidence, 'Exact runs')))
+  }
+
   const modelMetricHints = {
     'Real / $': 'Distinct canonical real issues credited per recorded benchmark dollar across every matched attempt.',
     'Completeness': 'Distinct canonical real issues credited to the model divided by all canonical real issues on the selected targets. The denominator is fixed across models.',
@@ -2102,9 +2223,9 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   function sortedModelStats(stats, params) {
-    const key = modelStatSorts[params.get('modelSort')] ? params.get('modelSort') : 'value'
-    const [getter, defaultDirection] = modelStatSorts[key]
-    const direction = params.get('modelDir') === 'asc' ? 1 : params.get('modelDir') === 'desc' ? -1 : defaultDirection
+    const key = modelSortKey(params)
+    const [getter] = modelStatSorts[key]
+    const direction = modelSortDirection(key, params.get('modelDir'))
     return [...stats].sort((a, b) => {
       const av = getter(a), bv = getter(b)
       if (av == null && bv == null) return a.label.localeCompare(b.label)
@@ -2115,10 +2236,10 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   function modelSortHeading(label, key, params, hint) {
-    const activeKey = modelStatSorts[params.get('modelSort')] ? params.get('modelSort') : 'value'
+    const activeKey = modelSortKey(params)
     const active = activeKey === key
     const defaultDirection = modelStatSorts[key][1] === 1 ? 'asc' : 'desc'
-    const currentDirection = params.get('modelDir') || (modelStatSorts[activeKey][1] === 1 ? 'asc' : 'desc')
+    const currentDirection = modelSortDirection(activeKey, params.get('modelDir')) === 1 ? 'asc' : 'desc'
     const direction = active ? (currentDirection === 'desc' ? 'asc' : 'desc') : defaultDirection
     return el('th', { class: key === 'model' ? '' : 'num', 'aria-sort': active ? (currentDirection === 'desc' ? 'descending' : 'ascending') : 'none' },
       el('span', { class: 'heading-with-hint' },
@@ -2159,10 +2280,8 @@ if (typeof module !== 'undefined' && module.exports) {
           `View ${row.real} canonical real findings for ${row.label}`),
       ))
     }
-    const headings = [
-      ['Model', 'model'], ['Real / $', 'value'], ['Benchmark total', 'totalCost'], ['Median known cost', 'medianCost'], ['Canonical real', 'real'], ['High + med', 'highMedium'], ['Precision', 'precision'], ['Completeness', 'completeness'], ['Cost / real', 'costPerReal'], ['Median runtime', 'wall'], ['Success', 'success'], ['Evidence', 'evidence'],
-    ]
-    return el('div', { class: 'table-wrap model-table-wrap', id: 'canonical-model-scroll', 'data-retain-scroll': '' }, el('table', { class: 'model-comparison-table' }, el('thead', {}, el('tr', {}, headings.map(([label, key]) => modelSortHeading(label, key, params, modelMetricHints[label] || metricHints[label])))), body))
+    const fullTable = el('div', { class: 'table-wrap model-table-wrap', id: 'canonical-model-scroll', 'data-retain-scroll': '' }, el('table', { class: 'model-comparison-table' }, el('thead', {}, el('tr', {}, modelDecisionHeadings.map(([label, key]) => modelSortHeading(label, key, params, modelMetricHints[label] || metricHints[label])))), body))
+    return responsiveDecisions('canonical-model', sortedModelStats(stats, params).map((row, index) => modelComparisonCard(row, index, params)), fullTable, modelMobileSorting(params))
   }
 
   function modelEvidencePanel(stats, params) {
@@ -2249,12 +2368,16 @@ if (typeof module !== 'undefined' && module.exports) {
     const allReal = new Set(eligible.flatMap((run) => run.issues.filter((issue) => issue.verdict === 'real').map((issue) => issue.id)))
     const body = el('tbody')
     const groups = groupedStats(eligible, 'model', eligible).sort((a, b) => a.label.localeCompare(b.label))
+    const cards = []
     for (const group of groups) {
+      const coverage = group.pending ? 'Pending' : `${group.real} / ${allReal.size} · ${fmt(allReal.size ? group.real / allReal.size : null, 'percent')}`
+      cards.push(el('article', { class: 'decision-card discovery-decision-card', 'data-candidate': group.id },
+        el('h3', {}, group.label), el('p', { class: 'subline' }, runCountLink(group.rows), group.pendingRows.length ? ` · ${group.pendingRows.length} pending` : ''), experimentalToolBadge(group.rows), decisionFacts([['real', 'Distinct real', fmt(discoveryValue(group, group.real))], ['completeness', 'Discovered coverage', coverage], ['pending', 'Pending runs', fmt(group.pendingRows.length)], ['evidence', 'Runs', runCountLink(group.rows)]])))
 
       body.append(el('tr', {},
         el('td', {}, group.label),
         el('td', { class: 'num' }, fmt(discoveryValue(group, group.real))),
-        el('td', { class: 'num' }, group.pending ? 'Pending' : `${group.real} / ${allReal.size} · ${fmt(allReal.size ? group.real / allReal.size : null, 'percent')}`),
+        el('td', { class: 'num' }, coverage),
         el('td', { class: 'num' }, fmt(group.pendingRows.length)),
         el('td', { class: 'num' }, runCountLink(group.rows)),
       ))
@@ -2263,7 +2386,7 @@ if (typeof module !== 'undefined' && module.exports) {
       el('div', { class: 'panel-head' }, el('div', {}, el('h2', {}, 'Discovered coverage'), el('p', {}, 'Reviewed discovery across completed, hash-verified runs for the selected skills, targets, and languages. Pending runs are excluded from discovery scores and denominators. This panel does not change the sealed canonical model score.'))),
       benchmarkContext(eligible),
       discoveryNotice(eligible),
-      eligible.length ? el('div', { class: 'table-wrap', id: 'discovered-model-scroll', 'data-retain-scroll': '' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Model'), el('th', { class: 'num' }, 'Distinct real'), el('th', { class: 'num' }, 'Discovered coverage'), el('th', { class: 'num' }, 'Pending runs'), el('th', { class: 'num' }, 'Runs'))), body)) : el('div', { class: 'empty' }, 'No completed benchmark runs match these filters.'),
+      eligible.length ? responsiveDecisions('discovered-model', cards, el('div', { class: 'table-wrap', id: 'discovered-model-scroll', 'data-retain-scroll': '' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Model'), el('th', { class: 'num' }, 'Distinct real'), el('th', { class: 'num' }, 'Discovered coverage'), el('th', { class: 'num' }, 'Pending runs'), el('th', { class: 'num' }, 'Runs'))), body))) : el('div', { class: 'empty' }, 'No completed benchmark runs match these filters.'),
     )
   }
 
@@ -2295,6 +2418,7 @@ if (typeof module !== 'undefined' && module.exports) {
         ['value', 'Best value'], ['candidate', 'Candidate'], ['cost', 'Cost'], ['realPerRun', 'Real / run'], ['highMedium', 'High + med'],
         ['precision', 'Precision'], ['completeness', 'Completeness'], ['costPerReal', 'Cost / real'], ['success', 'Success'],
       ], sort, (event) => viewParams(params, { decision: event.target.value === 'value' ? '' : event.target.value, decisionDir: '' }))),
+      field('Order', select('decision-order-mobile', [['desc', 'Descending'], ['asc', 'Ascending']], decisionSortDirection(sort, params.get('decisionDir')) === 1 ? 'asc' : 'desc', (event) => viewParams(params, { decisionDir: event.target.value === (decisionSorts[sort][1] === 1 ? 'asc' : 'desc') ? '' : event.target.value })), 'mobile-direction'),
     )
     frame(el('div', {},
       discoveryNotice(base),
@@ -2325,6 +2449,7 @@ if (typeof module !== 'undefined' && module.exports) {
 
   function comparisonMatrix(groups) {
     const body = el('tbody')
+    const cards = []
     const allIssues = new Map()
     for (const group of groups) for (const [key, row] of group.issueRows) {
       if (row.issue.verdict !== 'real') continue
@@ -2334,13 +2459,20 @@ if (typeof module !== 'undefined' && module.exports) {
     for (const group of groups) {
       if (!group.rows.length) {
         body.append(el('tr', {}, el('td', {}, el('strong', {}, group.label), skillInfoLink(group.id)), el('td', { colspan: 8 }, 'Benchmark metrics unavailable · no completed benchmark runs')))
+        cards.push(el('article', { class: 'decision-card comparison-decision-card', 'data-candidate': group.id }, el('h3', {}, group.label), el('p', {}, 'Benchmark metrics unavailable · no completed benchmark runs'), skillInfoLink(group.id)))
         continue
       }
       const unique = [...allIssues.values()].filter((reporters) => reporters.size === 1 && reporters.has(group.id)).length
       const shared = [...allIssues.values()].filter((reporters) => reporters.size > 1 && reporters.has(group.id)).length
+      cards.push(el('article', { class: 'decision-card comparison-decision-card', 'data-candidate': group.id },
+        el('h3', {}, group.label), el('p', { class: 'subline' }, runCountLink(group.rows), group.pendingRows.length ? ` · ${group.pendingRows.length} pending` : ''), experimentalToolBadge(group.rows), decisionFacts([['real', 'Distinct real', fmt(discoveryValue(group, group.real))], ['cost', 'Attempted benchmark cost', fmt(group.totalCost, 'money')], ['unique', 'Only this skill', fmt(discoveryValue(group, unique))], ['shared', 'Shared', fmt(discoveryValue(group, shared))]]),
+        el('p', { class: 'cost-basis' }, 'All selected attempts. ', runCostBasis(group.rows)), skillVersionFooter(group),
+        decisionDetails(`comparison-metrics-${encodeURIComponent(group.id)}`, group.label, [['possible', 'Total real found', fmt(discoveryValue(group, group.completenessBreakdown.all.possible))], ['completeness', 'Completeness', fmt(discoveryValue(group, group.completeness), 'percent')], ['precision', 'Precision', fmt(discoveryValue(group, group.precision), 'percent')], ['success', 'Success', fmt(group.successRate, 'percent')]]),
+        el('div', { class: 'shortlist-actions' }, hashLink('Evidence', runsHash(group.rows), 'button-link decision-evidence'), hashLink('Setup', skillHash(group.id), 'button-link decision-setup'))))
       body.append(el('tr', {}, el('td', {}, el('strong', {}, runSetLink(group.rows, group.label)), el('span', { class: 'subline' }, skillInfoLink(group.id), ' · ', runCountLink(group.rows), group.pendingRows.length ? ` · ${group.pendingRows.length} pending` : ''), experimentalToolBadge(group.rows), skillVersionFooter(group, 'span')), el('td', { class: 'num' }, fmt(group.totalCost, 'money')), el('td', { class: 'num' }, fmt(discoveryValue(group, group.real))), el('td', { class: 'num' }, fmt(discoveryValue(group, unique))), el('td', { class: 'num' }, fmt(discoveryValue(group, shared))), el('td', { class: 'num' }, fmt(discoveryValue(group, group.completenessBreakdown.all.possible))), el('td', { class: 'num' }, fmt(discoveryValue(group, group.completeness), 'percent')), el('td', { class: 'num' }, fmt(discoveryValue(group, group.precision), 'percent')), el('td', { class: 'num' }, fmt(group.successRate, 'percent'))))
     }
-    return el('div', { class: 'table-wrap', id: 'skill-comparison-scroll', 'data-retain-scroll': '' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Skill'), el('th', { class: 'num' }, metricLabel('Attempted cost')), el('th', { class: 'num' }, metricLabel('Distinct real')), el('th', { class: 'num' }, metricLabel('Only this skill')), el('th', { class: 'num' }, metricLabel('Shared')), el('th', { class: 'num' }, metricLabel('Total real found')), el('th', { class: 'num' }, metricLabel('Completeness')), el('th', { class: 'num' }, metricLabel('Precision')), el('th', { class: 'num' }, metricLabel('Success')))), body))
+    const fullTable = el('div', { class: 'table-wrap', id: 'skill-comparison-scroll', 'data-retain-scroll': '' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Skill'), el('th', { class: 'num' }, metricLabel('Attempted cost')), el('th', { class: 'num' }, metricLabel('Distinct real')), el('th', { class: 'num' }, metricLabel('Only this skill')), el('th', { class: 'num' }, metricLabel('Shared')), el('th', { class: 'num' }, metricLabel('Total real found')), el('th', { class: 'num' }, metricLabel('Completeness')), el('th', { class: 'num' }, metricLabel('Precision')), el('th', { class: 'num' }, metricLabel('Success')))), body))
+    return responsiveDecisions('skill-comparison', cards, fullTable)
   }
 
   // site-spec: SITE-PAGE-005 ../../spec/site/pages.md#SITE-PAGE-005
@@ -3246,6 +3378,9 @@ if (typeof module !== 'undefined' && module.exports) {
     frame(el('div', {}, hero('Unknown route', title, detail, [hashLink('Return to overview', '#overview')]), el('div', { class: 'notice' }, 'The requested dashboard record is not embedded in this export.')))
   }
 
+  narrowLayout.addEventListener('change', (event) => {
+    if (!event.matches) for (const details of app.querySelectorAll('.metric-table-disclosure')) details.open = true
+  })
   window.addEventListener('hashchange', route)
   route()
 })()
