@@ -36,7 +36,7 @@ a:hover { color: #a9c5ff; }
 button, select, input { border: 1px solid var(--line); border-radius: 8px; background: #0d1219; padding: .58rem .7rem; }
 button { cursor: pointer; }
 button:hover { border-color: #4a5c70; background: #171e28; }
-button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible, [tabindex="0"]:focus-visible { outline: 3px solid rgb(103 232 193 / 40%); outline-offset: 2px; }
+button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible, [tabindex="0"]:focus-visible, [tabindex="-1"]:focus-visible { outline: 3px solid rgb(103 232 193 / 40%); outline-offset: 2px; }
 button.primary { border-color: #278c74; background: #146b58; color: white; }
 button.primary:hover { background: #188069; }
 button:disabled { opacity: .45; cursor: not-allowed; }
@@ -66,8 +66,8 @@ h3 { margin: 0; font-size: 1rem; }
 .breadcrumb { display: flex; flex-wrap: wrap; gap: .45rem; color: var(--muted); font-size: .86rem; margin-top: 1.2rem; }
 .breadcrumb a { color: var(--muted); }
 
-.landing-hero { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(260px, .65fr); gap: 2rem; align-items: end; padding: 4rem 0 2rem; }
-.landing-hero h1 { max-width: 920px; }
+.landing-hero { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(260px, .65fr); gap: 2rem; align-items: end; padding: 2.1rem 0 1.4rem; }
+.landing-hero h1 { max-width: 920px; font-size: clamp(2rem, 4vw, 3.4rem); line-height: 1.08; }
 .landing-hero p { max-width: 760px; margin-bottom: 0; }
 .hero-actions { display: flex; flex-wrap: wrap; gap: .65rem; margin-top: 1.35rem; }
 .hero-actions .button-link { padding: .7rem .9rem; }
@@ -410,6 +410,39 @@ pre { max-height: 560px; margin: 0; padding: 1rem 1.1rem; overflow: auto; border
 .finding-reporter { display: block; overflow-wrap: anywhere; }
 
 .finding-reasons, .reporter-list { grid-column: 1 / -1; }
+
+.constraint-panel { padding: 1.1rem; }
+.constraint-heading { margin-bottom: .9rem; }
+.constraint-heading h2 { font-size: 1.2rem; }
+.constraint-heading p { margin: .35rem 0 0; color: var(--muted); font-size: .86rem; line-height: 1.5; }
+.constraint-controls { display: grid; grid-template-columns: minmax(240px, 2fr) repeat(3, minmax(140px, 1fr)); align-items: end; justify-content: initial; }
+.constraint-controls .landing-picker { min-width: 0; }
+.constraint-controls select { width: 100%; min-width: 0; max-width: 100%; }
+.shortlist-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .8rem; }
+.shortlist-card { display: flex; flex-direction: column; min-width: 0; }
+.shortlist-card h3 { margin-bottom: .45rem; }
+.shortlist-card > strong { margin-top: .55rem; font-size: 1.75rem; }
+.shortlist-card .shortlist-reason { min-height: 2.6em; line-height: 1.45; }
+.shortlist-facts { margin: 1rem 0 .5rem; display: grid; gap: .35rem; }
+.shortlist-facts > div { display: flex; justify-content: space-between; gap: .75rem; font-size: .8rem; }
+.shortlist-facts dt { color: var(--muted); }
+.shortlist-facts dd { margin: 0; font-variant-numeric: tabular-nums; }
+.shortlist-actions, .setup-links { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; margin-top: 1rem; }
+.compare-choice { display: inline-flex; align-items: center; gap: .4rem; font-size: .82rem; }
+.shortlist-card > .skill-version { padding-top: .7rem; }
+.analysis-disclosure > summary { padding: .9rem 0; color: var(--text); font-size: 1.05rem; font-weight: 650; cursor: pointer; }
+.analysis-disclosure > .landing-section { margin-top: .75rem; }
+.setup-variant + .setup-variant { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 1rem; }
+.setup-source { color: var(--muted); font-size: .86rem; overflow-wrap: anywhere; }
+@media (max-width: 900px) {
+  .constraint-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .shortlist-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 500px) {
+  .constraint-controls { grid-template-columns: 1fr; }
+}
+
+.inline-comparison { position: static; width: 100%; max-width: none; margin-top: 1rem; }
 </style>
 </head>
 <body>
@@ -880,7 +913,7 @@ if (typeof module !== 'undefined' && module.exports) {
         hash = hash.split('?')[0] + '?' + query.toString()
       }
     }
-    for (const key of ['platform', 'model', 'history', 'skills', 'languages', 'targets', 'compareSkills', 'completeness']) {
+    for (const key of ['platform', 'model', 'history', 'skills', 'languages', 'targets', 'compareSkills', 'completeness', 'priority']) {
       const value = activeParams.get(key)
       if (value && !query.has(key)) hash += `${hash.includes('?') ? '&' : '?'}${key}=${encodeURIComponent(value)}`
     }
@@ -935,7 +968,7 @@ if (typeof module !== 'undefined' && module.exports) {
             el('input', { id: 'include-history', type: 'checkbox', checked: activeParams.get('history') === 'all', onchange: (event) => viewParams(activeParams, { history: event.target.checked ? 'all' : '' }, location.hash.slice(1).split('?')[0] || 'home') }),
             'Include historical data'),
           el('span', {}, activeParams.get('history') === 'all' ? 'Current and historical results' : 'Current benchmark results'),
-          activeView === 'home' && [...activeParams.keys()].some((key) => key !== 'compareSkills') ? el('button', { class: 'clear-filters', id: 'clear-filters', onclick: () => viewParams(new URLSearchParams(), { compareSkills: activeParams.get('compareSkills') }, 'home') }, 'Clear filters') : null,
+          activeView === 'home' && [...activeParams.keys()].some((key) => !['compareSkills', 'priority'].includes(key)) ? el('button', { class: 'clear-filters', id: 'clear-filters', onclick: () => viewParams(new URLSearchParams(), { compareSkills: activeParams.get('compareSkills'), priority: activeParams.get('priority') }, 'home') }, 'Clear filters') : null,
         ),
         el('main', { id: 'main' }, hiddenHistoryNotice(), contextNotice(), content),
         el('footer', { class: 'footer' },
@@ -956,6 +989,8 @@ if (typeof module !== 'undefined' && module.exports) {
       if (selectedSkills.length) notes.push(`Skills: ${selectedSkills.map((id) => tools.get(id)?.label || id).join(', ')}`)
       if (selectedTargets.length) notes.push(`Targets: ${selectedTargets.join(', ')}`)
     }
+    const priority = activeParams.get('priority')
+    if (activeView !== 'home' && ['coverage', 'speed'].includes(priority)) notes.push(`Summary priority: ${priority === 'coverage' ? 'observed coverage' : 'time per finding'}. Saved for your Summary shortlist.`)
     const scope = activeParams.get('completeness')
     if (activeView !== 'home' && ['major', 'majorMinor'].includes(scope)) {
       notes.push(`Summary count: ${scope === 'major' ? 'blocker and high' : 'blocker, high and medium'}. This page uses its own severity controls or all severities.`)
@@ -1023,7 +1058,7 @@ if (typeof module !== 'undefined' && module.exports) {
     heading.id ||= 'view-heading'
     heading.tabIndex = -1
     if (interaction && interaction.destination === location.hash && interaction.view === interactionView(path, params)) {
-      for (const id of interaction.openMenus) {
+      for (const id of interaction.openDetails) {
         const menu = document.getElementById(id)
         if (menu) menu.open = true
       }
@@ -1096,7 +1131,7 @@ if (typeof module !== 'undefined' && module.exports) {
       focusId: document.activeElement.id,
       fallbackId: document.activeElement.closest('.filter-menu')?.querySelector('summary')?.id,
       left: window.scrollX, top: window.scrollY,
-      openMenus: [...app.querySelectorAll('.filter-menu[open]')].map((node) => node.id),
+      openDetails: [...app.querySelectorAll('details[data-retain-open][open]')].map((node) => node.id),
       scrollAreas: [...app.querySelectorAll('[data-retain-scroll]')].map((node) => [node.id, node.scrollLeft, node.scrollTop]),
     }
   }
@@ -1142,7 +1177,7 @@ if (typeof module !== 'undefined' && module.exports) {
   function checklist(label, key, choices, params) {
     const selected = new Set(values(params, key))
     const summary = selected.size ? `${label} · ${selected.size}` : `${label} · All`
-    return el('details', { class: 'filter-menu', id: `filter-menu-${key}` },
+    return el('details', { class: 'filter-menu', id: `filter-menu-${key}`, 'data-retain-open': '' },
       el('summary', { id: `filter-summary-${key}` }, summary),
       el('div', { class: 'filter-popover', id: `filter-options-${key}`, 'data-retain-scroll': '' },
         choices.map(([value, text]) => {
@@ -1164,7 +1199,7 @@ if (typeof module !== 'undefined' && module.exports) {
     return configuredModels.find((model) => model.id === id)?.label || id || 'Model unavailable'
   }
 
-  function modelPicker(params, extraClass = '') {
+  function modelPicker(params, extraClass = '', label = 'Model under test') {
     const platform = params.get('platform') || 'all'
     const model = selectedModel(params)
     const selected = platform === 'all' ? model : `${platform}:${model}`
@@ -1192,7 +1227,7 @@ if (typeof module !== 'undefined' && module.exports) {
     // Explicit links can select combinations without evidence. Keep that selection visible.
     if (!selections.has(selected)) add(control, selected, `${modelLabel(model)} · ${platform}`, platform, model)
     control.value = selected
-    return field('Model under test', control, extraClass)
+    return field(label, control, extraClass)
   }
 
   function matchesSelectedModel(run, params) {
@@ -1444,6 +1479,42 @@ if (typeof module !== 'undefined' && module.exports) {
     return landingRankCard(group, `#${rank}`, fmt(score.value, 'percent'), `${score.found} of ${score.possible} discovered real issues · ${group.coverage} target${group.coverage === 1 ? '' : 's'}`)
   }
 
+  // site-spec: SITE-PAGE-015 ../../spec/site/pages.md#SITE-PAGE-015
+  function shortlistCard(group, rank, scope, priority, params) {
+    const selected = selectionFrom(params)
+    const checked = selected.includes(group.id)
+    const scoped = group.completenessBreakdown[scope]
+    const scores = {
+      value: [`${group.scopedFindingsPerDollar?.toFixed(2)} real / $`, 'Reviewed distinct real findings per dollar.'],
+      coverage: [fmt(scoped.value, 'percent'), `${scoped.found} of ${scoped.possible} observed real findings on matching revisions.`],
+      speed: [`${fmt(group.scopedMinutesPerFinding)} min / finding`, 'Recorded review time per distinct real finding.'],
+    }
+    const comparison = el('input', { id: `shortlist-compare-${encodeURIComponent(group.id)}`, type: 'checkbox', checked, disabled: !checked && selected.length >= 5, 'aria-label': `Compare ${group.label}`, onchange: (event) => setComparison(params, group.id, event.target.checked) })
+    const reviewedTargets = new Set(group.reviewedRows.map((run) => run.targetId)).size
+    const costBasis = group.reviewedRows.some((run) => run.usage.sources.costUsd === 'api-estimate') ? 'reviewed cost, includes API estimates' : 'reviewed recorded cost'
+    return el('article', { class: 'rank-card shortlist-card', 'data-skill-id': group.id },
+      el('div', { class: 'rank-number' }, `#${rank}`),
+      el('h3', {}, hashLink(group.label, skillHash(group.id))),
+      experimentalToolBadge(group.reviewedRows),
+      el('strong', {}, scores[priority][0]),
+      el('p', { class: 'shortlist-reason' }, scores[priority][1]),
+      el('dl', { class: 'shortlist-facts' },
+        el('div', {}, el('dt', {}, 'Reviewed real findings'), el('dd', {}, fmt(scoped.found))),
+        priority !== 'coverage' ? el('div', {}, el('dt', {}, 'Observed coverage'), el('dd', {}, fmt(scoped.value, 'percent'))) : null,
+        priority !== 'value' ? el('div', {}, el('dt', {}, 'Real / $'), el('dd', {}, fmt(group.scopedFindingsPerDollar))) : null,
+        priority !== 'speed' ? el('div', {}, el('dt', {}, 'Minutes / finding'), el('dd', {}, fmt(group.scopedMinutesPerFinding))) : null,
+      ),
+      el('p', {}, `${group.reviewedRows.length} reviewed attempt${group.reviewedRows.length === 1 ? '' : 's'} · ${reviewedTargets} target${reviewedTargets === 1 ? '' : 's'} · ${fmt(group.cost, 'money')} ${costBasis}`),
+      group.pendingRows.length ? el('p', {}, `${group.pendingRows.length} pending attempt${group.pendingRows.length === 1 ? '' : 's'} excluded from recommendation metrics.`) : null,
+      skillVersionFooter({ rows: group.reviewedRows }),
+      el('div', { class: 'shortlist-actions' },
+        el('label', { class: 'compare-choice', for: comparison.id }, comparison, 'Compare'),
+        hashLink('Evidence', runsHash(group.reviewedRows), 'button-link shortlist-evidence'),
+        hashLink('Setup', skillHash(group.id), 'button-link shortlist-setup'),
+      ),
+    )
+  }
+
   // site-spec: SITE-PAGE-002 ../../spec/site/pages.md#SITE-PAGE-002
   function renderLanding(params) {
     const requestedScope = params.get('completeness') || 'all'
@@ -1457,19 +1528,19 @@ if (typeof module !== 'undefined' && module.exports) {
     const leaderRuns = verifiedRuns.filter((run) => matchesEvidenceDimensions(run, evidenceParams))
     const verifiedReal = new Set(leaderRuns.flatMap((run) => run.issues.filter((issue) => issue.verdict === 'real').map((issue) => issueKey(run.targetId, issue))))
     const catalogue = skillCatalogue(leaderRuns, evidenceParams)
-    const groups = groupedStats(leaderRuns, 'skill', leaderRuns).filter((group) => group.cost > 0)
+    const groups = groupedStats(leaderRuns, 'skill', leaderRuns).filter((group) => group.reviewedRows.length)
     const scopedGroups = groups.map((group) => {
       const completeness = group.completenessBreakdown[completenessScope]
-      const elapsedMs = total(group.reviewedRows, (run) => run.wallMs)
+      const elapsedMs = group.reviewedRows.every((run) => Number.isFinite(run.wallMs) && run.wallMs >= 0) ? total(group.reviewedRows, (run) => run.wallMs) : null
       const unique = group.realRows.filter((row) => scopeSeverities[completenessScope].includes(row.issue.severity) && reporterCount(row.issue) === 1).length
       return {
         ...group,
-        scopedFindingsPerDollar: completeness.found / group.cost,
-        scopedMinutesPerFinding: completeness.found > 0 && elapsedMs > 0 ? elapsedMs / 60000 / completeness.found : null,
+        scopedFindingsPerDollar: group.cost > 0 ? completeness.found / group.cost : null,
+        scopedMinutesPerFinding: completeness.found > 0 && elapsedMs != null ?  elapsedMs / 60000 / completeness.found : null,
         scopedUnique: unique,
       }
     })
-    const valueGroups = [...scopedGroups]
+    const valueGroups = scopedGroups.filter((group) => group.scopedFindingsPerDollar != null)
       .sort((a, b) => b.scopedFindingsPerDollar - a.scopedFindingsPerDollar || a.label.localeCompare(b.label))
       .slice(0, 3)
     const completenessGroups = [...scopedGroups]
@@ -1483,20 +1554,30 @@ if (typeof module !== 'undefined' && module.exports) {
     const uniqueGroups = [...scopedGroups]
       .sort((a, b) => b.scopedUnique - a.scopedUnique || b.completenessBreakdown[completenessScope].found - a.completenessBreakdown[completenessScope].found || a.label.localeCompare(b.label))
       .slice(0, 3)
+    const priorityLabels = { value: 'Best value', coverage: 'Most observed coverage', speed: 'Fastest useful review' }
+    const priority = Object.hasOwn(priorityLabels, params.get('priority')) ? params.get('priority') : 'value'
+    const ranked = priority === 'coverage' ? completenessGroups : priority === 'speed' ? fastestGroups : valueGroups
+    const shortlist = ranked.filter((group) => group.completenessBreakdown[completenessScope].found > 0).slice(0, 3)
+    const emptyReasons = {
+      value: 'No positive reviewed findings with known, positive review cost match these constraints.',
+      coverage: 'No reviewed discoveries in the selected severity scope match these constraints.',
+      speed: 'No positive reviewed findings with complete recorded review time match these constraints.',
+    }
+    const priorityPicker = field('Prioritize', select('shortlist-priority', Object.entries(priorityLabels), priority, (event) => viewParams(params, { priority: event.target.value === 'value' ? '' : event.target.value })), 'landing-picker')
     const sectionScope = `${scopeLabels[completenessScope]}${selectedLanguages.length ? ` · ${selectedLanguages.join(', ')}` : ''}`
     const completenessPicker = field('Count', select('completeness-scope', Object.entries(scopeLabels), completenessScope, (event) => viewParams(params, { completeness: event.target.value === 'all' ? '' : event.target.value })), 'landing-picker')
     const languageChoices = [['all', 'All languages'], ...languages.map((language) => [language, language])]
     if (!languageChoices.some(([value]) => value === selectedLanguage)) languageChoices.push([selectedLanguage, selectedLanguages.join(', ') + ' (selected)'])
     const languagePicker = field('Language', select('language-scope', languageChoices, selectedLanguage, (event) => viewParams(params, { languages: event.target.value === 'all' ? '' : event.target.value })), 'landing-picker')
-    const selectedModelPicker = modelPicker(params, 'landing-picker')
+    const selectedModelPicker = modelPicker(params, 'landing-picker', 'Platform / model')
     frame(el('div', {},
       el('section', { class: 'landing-hero hero' },
         el('div', {},
           el('div', { class: 'eyebrow' }, 'Claude and Codex review skills'),
-          el('h1', {}, 'Find the code-review skill worth its price.'),
-          el('p', {}, 'Compare completed Claude and Codex benchmarks on real Go, Rust, and C++ pull requests.'),
+          el('h1', {}, 'Choose a code-review skill.'),
+          el('p', {}, 'Choose a platform, language, and priority. Compare a small shortlist against its recorded benchmark evidence.'),
           el('div', { class: 'hero-actions' },
-            hashLink('Explore the leaderboard', '#choose', 'button-link primary'),
+            hashLink('Explore the leaderboard', '#choose', 'button-link'),
           ),
         ),
         el('div', { class: 'landing-proof', 'aria-label': 'Benchmark size' },
@@ -1505,12 +1586,23 @@ if (typeof module !== 'undefined' && module.exports) {
           el('div', {}, el('strong', {}, evidenceValue(leaderRuns, verifiedReal.size)), el('span', {}, 'discovered real findings')),
         ),
       ),
+      el('section', { class: 'panel constraint-panel', 'aria-labelledby': 'constraints-title' },
+        el('div', { class: 'constraint-heading' }, el('h2', { id: 'constraints-title' }, 'Start with your constraints'), el('p', {}, 'Choose what you can run and what matters most. Severity applies to the findings counted in every recommendation.')),
+        el('div', { class: 'leader-pickers constraint-controls' }, selectedModelPicker, languagePicker, priorityPicker, completenessPicker),
+      ),
       discoveryNotice(leaderRuns),
       leaderRuns.length ? null : el('div', { class: 'notice info evidence-note' }, 'No completed benchmark runs match these filters. Experimental reports do not contribute to benchmark rankings.'),
+      el('section', { class: 'landing-section shortlist-section', 'aria-labelledby': 'shortlist-title' },
+        el('div', { class: 'landing-section-head' }, el('div', {}, el('div', { class: 'eyebrow' }, priorityLabels[priority]), el('h2', { id: 'shortlist-title' }, 'Your shortlist'), el('p', {}, `${sectionScope}. Recommendations use reviewed discoveries, not canonical gold scores.`))),
+        shortlist.length ? el('div', { class: 'shortlist-grid' }, shortlist.map((group, index) => shortlistCard(group, index + 1, completenessScope, priority, params))) :
+          el('div', { class: 'empty panel shortlist-empty' }, el('p', {}, emptyReasons[priority]), el('p', {}, 'Pending evidence and unavailable measurements cannot establish a recommendation.'), hashLink('Inspect matching runs', runsHash(leaderRuns), 'button-link')),
+        comparisonTray(selectionFrom(params), params, true),
+      ),
+      el('details', { class: 'landing-section analysis-disclosure', id: 'leader-analysis', 'data-retain-open': '' },
+        el('summary', { id: 'leader-analysis-summary' }, 'Explore all four benchmark leader views'),
       el('section', { class: 'landing-section leaders-section', 'aria-labelledby': 'leaders-title' },
         el('div', { class: 'landing-section-head' },
           el('div', {}, el('div', { class: 'eyebrow' }, 'Benchmark leaders'), el('h2', { id: 'leaders-title' }, 'Leaders'), el('p', {}, 'The strongest value, coverage, speed, and discovery results for the selected filters.')),
-          el('div', { class: 'leader-pickers' }, selectedModelPicker, completenessPicker, languagePicker),
         ),
         el('div', { class: 'leader-section', hidden: groups.length ? null : '', 'aria-labelledby': 'value-leaders-title' },
           el('div', { class: 'leader-section-head' },
@@ -1557,6 +1649,9 @@ if (typeof module !== 'undefined' && module.exports) {
         ),
         el('p', { class: 'method-note' }, 'Model, count, and language apply to every leader calculation. Completeness means the share of distinct discovered real findings found on the selected targets a skill reviewed. Cohort-local judgements are not canonical gold. This is a small benchmark: three pull requests, one per language.'),
       ),
+      ),
+      el('details', { class: 'landing-section analysis-disclosure', id: 'skill-guide', 'data-retain-open': '' },
+        el('summary', { id: 'skill-guide-summary' }, 'Browse every tested skill'),
       el('section', { class: 'landing-section', 'aria-labelledby': 'skills-title' },
         el('div', { class: 'landing-section-head' },
           el('div', {}, el('div', { class: 'eyebrow' }, 'Skill guide'), el('h2', { id: 'skills-title' }, 'What each skill does'), el('p', {}, 'Short descriptions of every tested skill. Open a card for setup, usage, and exact run evidence.')),
@@ -1564,7 +1659,8 @@ if (typeof module !== 'undefined' && module.exports) {
         ),
         el('div', { class: 'skill-summary-grid' }, catalogue.map((skill) => landingSkillCard(skill, leaderRuns))),
       ),
-    ), `${groups.length} ranked candidates.`)
+      ),
+    ), `${shortlist.length} shortlisted candidate${shortlist.length === 1 ? '' : 's'}. ${catalogue.length} skills in the filtered catalogue.`)
   }
 
   function selectionFrom(params) { return values(params, 'compareSkills').filter((id) => tools.has(id) && matchesPlatform(tools.get(id), params)).slice(0, 5) }
@@ -1576,11 +1672,11 @@ if (typeof module !== 'undefined' && module.exports) {
     viewParams(params, { compareSkills: [...selected].join(',') })
   }
 
-  function comparisonTray(selected, params) {
+  function comparisonTray(selected, params, inline = false) {
     if (!selected.length) return null
     const next = new URLSearchParams(params)
     next.set('compareSkills', selected.join(','))
-    return el('aside', { class: 'compare-dock', 'aria-live': 'polite' },
+    return el('aside', { class: `compare-dock${inline ? ' inline-comparison' : ''}`, 'aria-live': 'polite' },
       el('div', {}, el('strong', {}, `${selected.length}/5 skills selected`), el('span', { class: 'subline' }, selected.map((id) => tools.get(id)?.label || id).join(' · '))),
       el('div', {}, el('button', { id: 'clear-skill-comparison', onclick: () => viewParams(params, { compareSkills: '' }) }, 'Clear'), ' ', hashLink('Compare skills', `#compare?${next.toString()}`, 'button-link primary')),
     )
@@ -2300,23 +2396,55 @@ if (typeof module !== 'undefined' && module.exports) {
     }).filter((skill) => skill.rows.length || skill.experiments.length).sort((a, b) => a.label.localeCompare(b.label))
   }
 
+  function recordedSetups(skill) {
+    const variants = new Map()
+    const add = (snapshot, run = null) => {
+      const key = JSON.stringify([snapshot.source, snapshot.install, snapshot.invoke, snapshot.repoUrl, snapshot.pageUrl])
+      if (!variants.has(key)) variants.set(key, { ...snapshot, rows: [], versions: new Set(), unversioned: false })
+      const variant = variants.get(key)
+      if (run) variant.rows.push(run)
+      if (snapshot.version) variant.versions.add(snapshot.version)
+      else variant.unversioned = true
+    }
+    if (skill.rows.length) for (const run of skill.rows) add(run.toolSnapshot || { source: run.toolSource, version: run.skillVersion }, run)
+    else add(skill)
+    return [...variants.values()].map((variant) => ({ ...variant, versions: [...variant.versions].sort() }))
+  }
+
+  function setupDetails(skill, setups) {
+    return el('section', { class: 'recorded-setups', 'aria-label': 'Recorded setup' },
+      el('h3', {}, 'Recorded setup'),
+      el('p', { class: 'method-note' }, skill.rows.length ? 'Instructions from the visible benchmark snapshots. Run evidence retains the measured version and fingerprint.' : 'Published catalogue source; no benchmark runs match the current filters.'),
+      setups.map((setup) => el('div', { class: 'setup-variant' },
+        el('p', { class: 'setup-source' }, `${skill.platform === 'codex' ? 'Codex' : 'Claude'} · ${setup.source || 'Source unavailable'}`),
+        skillVersionFooter(setup, 'span'),
+        el('dl', { class: 'skill-usage' },
+          el('div', {}, el('dt', {}, 'Get it'), el('dd', {}, setup.install ? el('code', {}, setup.install) : 'No installation instructions were recorded.')),
+          el('div', {}, el('dt', {}, 'Use it'), el('dd', {}, setup.invoke ? el('code', {}, setup.invoke) : 'No invocation was recorded.')),
+        ),
+        el('div', { class: 'setup-links' },
+          setup.repoUrl ? externalLink('GitHub ↗', setup.repoUrl) : null,
+          setup.pageUrl ? externalLink('Skill page ↗', setup.pageUrl) : null,
+          setup.rows.length ? runSetLink(setup.rows, 'These benchmark runs') : null,
+        ),
+      )),
+    )
+  }
+
   function skillCard(skill) {
     const languages = [...new Set(skill.rows.map((run) => targetForRun(run)?.language).filter(Boolean))]
+    const setups = recordedSetups(skill)
+    const sources = [...new Set(setups.map((setup) => setup.source).filter(Boolean))]
     return el('article', { class: 'skill-card', id: `skill-${skill.id}` },
       el('div', { class: 'skill-card-head' },
-        el('div', {}, el('h2', {}, skill.label), el('span', { class: 'subline' }, hintedLabel(skill.source, 'Plugin package or built-in source identifier recorded by the benchmark.'), ` · ${languages.join(', ') || 'all benchmark languages'}`)),
+        el('div', {}, el('h2', {}, skill.label), el('span', { class: 'subline' }, hintedLabel(sources.length === 1 ? sources[0] : sources.length ? 'Multiple recorded sources' : 'Source unavailable', 'Plugin package or built-in source identifiers recorded by the selected benchmark snapshots.'), ` · ${languages.join(', ') || 'all benchmark languages'}`)),
         el('div', { class: 'badges tool-metadata-badges' }, experimentalToolBadge(skill), skill.parked ? badge('parked', 'dnf') : null),
       ),
       el('p', {}, skill.description || 'No description is recorded for this tested skill.'),
       skill.parkedReason ? el('div', { class: 'notice' }, skill.parkedReason) : null,
-      el('dl', { class: 'skill-usage' },
-        el('div', {}, el('dt', {}, 'Get it'), el('dd', {}, skill.install ? el('code', {}, skill.install) : 'See the project page for installation instructions.')),
-        el('div', {}, el('dt', {}, 'Use it'), el('dd', {}, skill.invoke ? el('code', {}, skill.invoke) : 'See the skill page for invocation details.')),
-      ),
+      setupDetails(skill, setups),
       el('div', { class: 'skill-actions' },
         skill.rows.length ? runCountLink(skill.rows, `${skill.rows.length} benchmark runs`) : el('span', {}, '0 benchmark runs'),
-        skill.repoUrl ? externalLink('GitHub ↗', skill.repoUrl) : null,
-        skill.pageUrl ? externalLink('Skill page ↗', skill.pageUrl) : null,
       ),
       skillVersionFooter(skill),
       historicalNotice(skill.rows),
