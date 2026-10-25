@@ -480,6 +480,17 @@ pre { max-height: 560px; margin: 0; padding: 1rem 1.1rem; overflow: auto; border
   html { scroll-behavior: auto; scroll-padding-bottom: 16rem; }
   main:has(.compare-dock:not(.inline-comparison)) { padding-bottom: 8rem; }
 }
+
+.complement-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; margin-bottom: 1rem; }
+.complement-controls .field { min-width: 0; }
+.complement-controls select { width: 100%; min-width: 0; max-width: 100%; }
+.complement-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: .8rem; }
+.complement-card p, .complement-findings li, .complement-reporters a { overflow-wrap: anywhere; }
+.complement-findings > summary { padding: .7rem 0; cursor: pointer; color: var(--accent-2); }
+.complement-findings ul { padding-left: 1.25rem; }
+.complement-findings li { margin: .8rem 0; }
+.complement-reporters a { display: block; margin-top: .35rem; }
+@media (max-width: 700px) { .complement-controls { grid-template-columns: minmax(0, 1fr); } }
 </style>
 </head>
 <body>
@@ -694,7 +705,49 @@ function calculateDiscoveryGroup(id, label, dimension, rows, universeRows, useAl
 }
 
 
-const api = { finite, sum, ratio, median, metricsFor, costSummary, canonicalSummary, calculateSkillModelGroups, calculateDiscoveryGroup, distinctSkillCount }
+// site-spec: SITE-METRIC-006 ../../spec/site/ingestion.md#SITE-METRIC-006
+function complementContribution(rows, baselineIds, candidateId, scope = 'all') {
+  const baseline = new Set(baselineIds.filter((id) => id !== candidateId))
+  const eligible = rows.filter((run) => run.status === 'complete' && isReviewed(run) && run.revisionKey)
+  const candidateRuns = eligible.filter((run) => skillIdentity(run) === candidateId)
+  const baselineRuns = eligible.filter((run) => baseline.has(skillIdentity(run)))
+  const revisions = (runs) => new Set(runs.map((run) => run.revisionKey))
+  const candidateRevisions = revisions(candidateRuns)
+  const baselineRevisions = baseline.size ? [...baseline].map((id) => revisions(baselineRuns.filter((run) => skillIdentity(run) === id))) : []
+  const common = new Set([...candidateRevisions].filter((key) => baselineRevisions.length && baselineRevisions.every((set) => set.has(key))))
+  const allowed = { major: ['blocker', 'high'], majorMinor: ['blocker', 'high', 'medium'] }[scope]
+  const collect = (runs, matching) => {
+    const found = new Map()
+    for (const run of runs) {
+      if (common.has(run.revisionKey) !== matching) continue
+      for (const issue of reviewedIssues(run)) {
+        if (!issue.id || issue.verdict !== 'real' || (allowed && !allowed.includes(issue.severity))) continue
+        const key = run.revisionKey + '\0' + issue.id
+        if (!found.has(key)) found.set(key, { key, issue, targetId: run.targetId, revisionKey: run.revisionKey, reporterIds: [] })
+        const row = found.get(key)
+        if (!row.reporterIds.includes(run.id)) row.reporterIds.push(run.id)
+      }
+    }
+    return found
+  }
+  const base = collect(baselineRuns, true)
+  const candidate = collect(candidateRuns, true)
+  return {
+    baselineIds: [...baseline], candidateId, sharedRevisions: [...common].sort(),
+    candidateRevisions: [...candidateRevisions].sort(),
+    baselineRevisions: baselineRevisions.length ? [...baselineRevisions[0]].filter((key) => baselineRevisions.every((set) => set.has(key))).sort() : [],
+    baselineRuns: baselineRuns.filter((run) => common.has(run.revisionKey)),
+    candidateRuns: candidateRuns.filter((run) => common.has(run.revisionKey)),
+    baselineReal: [...base.values()],
+    additional: [...candidate.values()].filter((row) => !base.has(row.key)),
+    shared: [...candidate.values()].filter((row) => base.has(row.key)).map((row) => ({ ...row, baselineReporterIds: base.get(row.key).reporterIds })),
+    outside: [...collect(candidateRuns, false).values()],
+    combinedReal: new Set([...base.keys(), ...candidate.keys()]).size,
+  }
+}
+
+
+const api = { finite, sum, ratio, median, metricsFor, costSummary, canonicalSummary, calculateSkillModelGroups, calculateDiscoveryGroup, distinctSkillCount, complementContribution }
 if (typeof module !== 'undefined' && module.exports) module.exports = api
 else root.SiteMetrics = api
 })(globalThis)
@@ -951,7 +1004,7 @@ if (typeof module !== 'undefined' && module.exports) {
         hash = hash.split('?')[0] + '?' + query.toString()
       }
     }
-    for (const key of ['platform', 'model', 'history', 'skills', 'languages', 'targets', 'compareSkills', 'completeness', 'priority']) {
+    for (const key of ['platform', 'model', 'history', 'skills', 'languages', 'targets', 'compareSkills', 'completeness', 'priority', 'baseline']) {
       const value = activeParams.get(key)
       if (value && !query.has(key)) hash += `${hash.includes('?') ? '&' : '?'}${key}=${encodeURIComponent(value)}`
     }
@@ -1006,7 +1059,7 @@ if (typeof module !== 'undefined' && module.exports) {
             el('input', { id: 'include-history', type: 'checkbox', checked: activeParams.get('history') === 'all', onchange: (event) => viewParams(activeParams, { history: event.target.checked ? 'all' : '' }, location.hash.slice(1).split('?')[0] || 'home') }),
             'Include historical data'),
           el('span', {}, activeParams.get('history') === 'all' ? 'Current and historical results' : 'Current benchmark results'),
-          activeView === 'home' && [...activeParams.keys()].some((key) => !['compareSkills', 'priority'].includes(key)) ? el('button', { class: 'clear-filters', id: 'clear-filters', onclick: () => viewParams(new URLSearchParams(), { compareSkills: activeParams.get('compareSkills'), priority: activeParams.get('priority') }, 'home') }, 'Clear filters') : null,
+          activeView === 'home' && [...activeParams.keys()].some((key) => !['compareSkills', 'priority', 'baseline'].includes(key)) ? el('button', { class: 'clear-filters', id: 'clear-filters', onclick: () => viewParams(new URLSearchParams(), { compareSkills: activeParams.get('compareSkills'), priority: activeParams.get('priority'), baseline: activeParams.get('baseline') }, 'home') }, 'Clear filters') : null,
         ),
         el('main', { id: 'main' }, hiddenHistoryNotice(), contextNotice(), content),
         el('footer', { class: 'footer' },
@@ -1031,7 +1084,9 @@ if (typeof module !== 'undefined' && module.exports) {
     if (activeView !== 'home' && ['coverage', 'speed'].includes(priority)) notes.push(`Summary priority: ${priority === 'coverage' ? 'observed coverage' : 'time per finding'}. Saved for your Summary shortlist.`)
     const scope = activeParams.get('completeness')
     if (activeView !== 'home' && ['major', 'majorMinor'].includes(scope)) {
-      notes.push(`Summary count: ${scope === 'major' ? 'blocker and high' : 'blocker, high and medium'}. This page uses its own severity controls or all severities.`)
+      if (activePath === 'compare') notes.push(`Marginal contribution count: ${scope === 'major' ? 'blocker and high' : 'blocker, high and medium'}. Whole-slice metrics remain all severities.`)
+      else if (activeView === 'compare') notes.push(`Summary count: ${scope === 'major' ? 'blocker and high' : 'blocker, high and medium'}. Direct run comparison uses all severities for local metrics and issue overlap.`)
+      else notes.push(`Summary count: ${scope === 'major' ? 'blocker and high' : 'blocker, high and medium'}. This page uses its own severity controls or all severities.`)
     }
     return notes.length ? el('div', { class: 'notice info evidence-note context-note', role: 'status' }, notes.join(' · ')) : null
   }
@@ -1754,7 +1809,7 @@ if (typeof module !== 'undefined' && module.exports) {
     next.set('compareSkills', selected.join(','))
     return el('aside', { class: `compare-dock${inline ? ' inline-comparison' : ''}`, 'aria-live': 'polite' },
       el('div', {}, el('strong', {}, `${selected.length}/5 skills selected`), el('span', { class: 'subline' }, selected.map((id) => tools.get(id)?.label || id).join(' · '))),
-      el('div', {}, el('button', { id: 'clear-skill-comparison', onclick: () => viewParams(params, { compareSkills: '' }) }, 'Clear'), ' ', hashLink('Compare skills', `#compare?${next.toString()}`, 'button-link primary')),
+      el('div', {}, el('button', { id: 'clear-skill-comparison', onclick: () => viewParams(params, { compareSkills: '', baseline: '' }) }, 'Clear'), ' ', hashLink('Compare skills', `#compare?${next.toString()}`, 'button-link primary')),
     )
   }
 
@@ -2475,6 +2530,53 @@ if (typeof module !== 'undefined' && module.exports) {
     return responsiveDecisions('skill-comparison', cards, fullTable)
   }
 
+  // site-spec: SITE-PAGE-018 ../../spec/site/pages.md#SITE-PAGE-018
+  function complementPanel(groups, rows, params) {
+    const selected = groups.map((group) => group.id)
+    const baseline = params.get('baseline') === 'others' ? 'others' : selected.includes(params.get('baseline')) ? params.get('baseline') : selected[0]
+    const scope = ['major', 'majorMinor'].includes(params.get('completeness')) ? params.get('completeness') : 'all'
+    const scopes = { all: 'All severities', major: 'Blocker + high', majorMinor: 'Blocker + high + medium' }
+    const candidates = baseline === 'others' ? groups : groups.filter((group) => group.id !== baseline)
+    const cards = candidates.map((group) => {
+      const baselineIds = baseline === 'others' ? selected.filter((id) => id !== group.id) : [baseline]
+      const comparison = Metrics.complementContribution(rows, baselineIds, group.id, scope)
+      const measured = comparison.sharedRevisions.length > 0
+      const metric = (value) => measured ? fmt(value) : 'N/A'
+      const pending = rows.filter((run) => [...baselineIds, group.id].includes(skillIdentity(run)) && !isReviewed(run))
+      const reporters = (row, ids = row.reporterIds) => ids.map((id) => runs.get(id)).filter(Boolean).map((run) => hashLink(`${run.toolLabel} · ${run.id}`, runHash(run), 'run-link'))
+      const findings = (name, items, shared = false) => el('details', { class: 'complement-findings', id: `complement-${name}-${encodeURIComponent(group.id)}`, 'data-retain-open': '' },
+        el('summary', { id: `complement-${name}-${encodeURIComponent(group.id)}-toggle` }, `${name === 'additional' ? 'Additional findings' : 'Overlapping findings'} · ${measured ? items.length : 'Unavailable'}`),
+        items.length ? el('ul', {}, items.map((row) => el('li', { 'data-issue-id': row.issue.id },
+          el('strong', {}, row.issue.title || row.issue.id), ' ', badge(row.issue.severity || 'unrated'),
+          el('p', { class: 'subline' }, `${row.issue.id} · ${row.revisionKey} · ${row.issue.file || 'file unavailable'}${row.issue.line ? ':' + row.issue.line : ''}`),
+          el('div', { class: 'complement-reporters' }, 'Candidate reports: ', reporters(row)),
+          shared ? el('div', { class: 'complement-reporters' }, 'Baseline reports: ', reporters(row, row.baselineReporterIds)) : null))) : el('p', {}, measured ? 'No reviewed findings in this category on the shared revisions.' : 'No comparable reviewed revisions; no marginal score is available.'))
+      return el('article', { class: 'decision-card complement-card', 'data-candidate': group.id, 'data-baseline': baselineIds.join(',') },
+        el('h3', {}, group.label), el('p', { class: 'complement-baseline' }, 'Against ', baselineIds.map((id) => tools.get(id)?.label || id).join(' + ')), experimentalToolBadge(group.rows), skillVersionFooter(group),
+        decisionFacts([
+          ['additional', 'Additional reviewed real', metric(comparison.additional.length), 'Distinct reviewed real identities found by this candidate but not the baseline on shared pinned PR revisions, within the selected severity scope. Repetitions do not multiply credit.'],
+          ['shared', 'Already in baseline', metric(comparison.shared.length), 'Candidate findings also reported by the chosen baseline, on shared reviewed revisions and within the selected severity scope.'],
+          ['baseline', 'Baseline reviewed real', metric(comparison.baselineReal.length)],
+          ['combined', 'Combined on shared revisions', metric(comparison.combinedReal)],
+        ]),
+        el('p', { class: 'complement-coverage' }, `${comparison.sharedRevisions.length} shared reviewed PR revisions · candidate ${comparison.candidateRevisions.length} · every baseline member ${comparison.baselineRevisions.length}. ${comparison.candidateRuns.length} candidate / ${comparison.baselineRuns.length} baseline matched attempts.`),
+        !measured ? el('p', { class: 'notice' }, pending.length ? 'Pending: comparable completed, reviewed evidence is unavailable. Pending runs earn no marginal credit.' : 'No shared completed, reviewed PR revisions. Missing coverage is not a measured miss.') : null,
+        el('p', { class: 'complement-outside' }, comparison.candidateRevisions.length ? `Outside shared coverage: ${comparison.outside.length} candidate findings across ${comparison.candidateRevisions.length - comparison.sharedRevisions.length} revisions; excluded from marginal credit.` : 'Outside shared coverage: no completed, reviewed pinned evidence; discoveries unavailable.'),
+        el('p', { class: 'cost-basis' }, `Candidate historical benchmark spend: ${fmt(group.rows.length ? group.totalCost : null, 'money')}. All ${group.rows.length} retained attempts, including failed and pending attempts. `, runCostBasis(group.rows)),
+        el('div', { class: 'shortlist-actions' }, comparison.candidateRuns.length ? runSetLink([...comparison.baselineRuns, ...comparison.candidateRuns], 'Inspect matched attempts') : null, group.rows.length ? hashLink('All candidate attempts', runsHash(group.rows), 'button-link') : null, hashLink('Setup', skillHash(group.id), 'button-link')),
+        findings('additional', comparison.additional), findings('shared', comparison.shared, true))
+    })
+    return el('section', { class: 'panel complement-panel' },
+      el('div', { class: 'panel-head' }, el('div', {}, el('h2', {}, 'What does another reviewer add?'), el('p', {}, 'Compare reviewed discoveries on PR revisions completed by the candidate and every baseline member.'))),
+      el('div', { class: 'panel-body' },
+        el('div', { class: 'complement-controls' },
+          field('Baseline', select('complement-baseline', [...groups.map((group) => [group.id, group.label]), ['others', 'Other selected skills (portfolio)']], baseline, (event) => viewParams(params, { baseline: event.target.value }))),
+          field('Count findings', select('complement-scope', Object.entries(scopes), scope, (event) => viewParams(params, { completeness: event.target.value === 'all' ? '' : event.target.value })))),
+        el('p', { class: 'complement-method' }, `${scopes[scope]}. Distinct identity unions across retained repetitions, not an expected detection rate for one review. These are reviewed discoveries, not sealed canonical scores. Each comparison can have different shared revision coverage.`),
+        el('p', { class: 'notice info complement-spend' }, 'Historical benchmark spend covers retained attempts and repetitions. It does not quote the price of one future combined review. Costs stay independent of the finding severity scope.'),
+        el('div', { class: 'complement-grid' }, cards)))
+  }
+
   // site-spec: SITE-PAGE-005 ../../spec/site/pages.md#SITE-PAGE-005
   function renderSkillCompare(params) {
     const selected = selectionFrom(params)
@@ -2484,22 +2586,23 @@ if (typeof module !== 'undefined' && module.exports) {
     const displayRows = base.filter((run) => selected.includes(skillIdentity(run)))
     const groups = selected.map((toolId) => aggregateRuns(toolId, tools.get(toolId)?.label || toolId, 'Skill', displayRows.filter((run) => skillIdentity(run) === toolId), base, true))
     const unionReal = new Set(groups.flatMap((group) => group.realRows.map((row) => issueKey(row.targetId, row.issue))))
-    const portfolioCost = groups.every((group) => group.totalCost != null) ? total(groups, (group) => group.totalCost) : null
+    const portfolioCost = Metrics.costSummary(displayRows.map((run) => ({ costUsd: run.usage.costUsd }))).cost
     frame(el('div', {},
-      discoveryNotice(displayRows),
-      compactHero('Compare skills', 'Put reviewers head to head.', 'Select two to five skills. Completed runs on the same pinned PR revision share reviewed issue identities across cohorts.'),
+      selected.length >= 2 && displayRows.length ? discoveryNotice(displayRows) : null,
+      compactHero('Compare skills', 'Find a complementary reviewer.', 'Choose two to five skills, then see what each candidate adds against a baseline reviewer or portfolio on shared pinned PR revisions.'),
       filterBar(params, { skills: false }),
-      el('p', {}, 'Experiment-only skills have no benchmark scores. ', hashLink('Compare archived experiment evidence', `#evaluation?skills=${encodeURIComponent(selected.join(','))}`)),
       compareSelector(params, selected, dimensionParams),
-      selected.length < 2 ? el('div', { class: 'empty panel' }, 'Select at least two skills to build a comparison.') : el('div', {},
+      selected.length < 2 ? el('div', { class: 'empty panel comparison-guidance' }, selected.length ? 'One reviewer selected. Add another skill to measure what it contributes beyond your baseline.' : 'Choose a baseline reviewer and at least one candidate above. Compare their additional reviewed discoveries, shared coverage and historical benchmark spend.') : !displayRows.length ? el('div', { class: 'empty panel comparison-guidance' }, 'No benchmark attempts for the selected reviewers match these filters. Change the model, target or language filters, or include historical data.') : el('div', {},
+        complementPanel(groups, displayRows, params),
         el('div', { class: 'notice info evidence-note' }, 'Completeness uses all discovered real issues from completed runs for the selected model, target, and language filters. Pending runs are excluded from discovery scores and denominators.'),
         el('section', { class: 'kpis decision-kpis' },
           kpi('Selected', fmt(selected.length), 'skills'),
           kpi('Completed evidence', fmt(displayRows.filter((run) => run.status === 'complete').length), 'runs across cohorts'),
-          kpi('Portfolio cost', fmt(portfolioCost, 'money'), runCountLink(displayRows, `${displayRows.length} attempted run${displayRows.length === 1 ? '' : 's'}`)),
-          kpi('Combined coverage', displayRows.length && displayRows.every((run) => !isReviewed(run)) ? 'Pending' : fmt(unionReal.size), 'distinct real issues'),
+          kpi('Historical benchmark spend', fmt(portfolioCost, 'money'), runCountLink(displayRows, `${displayRows.length} attempted run${displayRows.length === 1 ? '' : 's'}`)),
+          kpi('Combined coverage', displayRows.length && displayRows.every((run) => !isReviewed(run)) ? 'Pending' : fmt(unionReal.size), 'whole-slice distinct real issues'),
         ),
-        el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('div', {}, el('h2', {}, 'Head-to-head evidence'), el('p', {}, 'Unique contribution shows what each skill adds beyond the other selected skills.'))), comparisonMatrix(groups)),
+        el('p', { class: 'cost-basis comparison-total-cost' }, 'All selected retained benchmark attempts. ', runCostBasis(displayRows)),
+        el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('div', {}, el('h2', {}, 'Head-to-head evidence'), el('p', {}, 'Whole selected evidence slice, across potentially unequal revisions and repetitions. Only this skill and Shared describe this slice; marginal credit above uses shared reviewed revisions and its own severity control.'))), comparisonMatrix(groups)),
         el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('div', {}, el('h2', {}, 'Cost / completeness'), el('p', {}, 'Upper-left candidates provide more discovered coverage for less total spend.'))), el('div', { class: 'panel-body' }, paretoChart(groups.filter((group) => group.rows.length)))),
       ),
     ), `${selected.length} selected skills.`)
